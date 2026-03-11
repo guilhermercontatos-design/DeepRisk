@@ -1,87 +1,65 @@
 import streamlit as st
 import pandas as pd
 import google.generativeai as genai
-import io
 
-# 1. Configuração da Página
-st.set_page_config(page_title="DeepRisk - Analisador de Risco", layout="wide")
-st.title("🛡️ DeepRisk: Analisador de Risco Avançado")
-st.subheader("Focado em Padrões de Arbitragem e Fraude - EstrelaBet")
+# Configuração visual básica
+st.set_page_config(page_title="DeepRisk - Auditoria", layout="wide")
+st.title("🛡️ DeepRisk: Analisador de Risco")
 st.markdown("---")
 
-# 2. Configuração do Gemini - Versão Estável
-def inicializar_modelo():
-    try:
-        if "GEMINI_API_KEY" not in st.secrets:
-            st.error("ERRO: Chave 'GEMINI_API_KEY' não encontrada nos Secrets.")
-            return None
-        
-        genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-        
-        # Mudança importante: Usando a string direta que a API atual exige
-        model = genai.GenerativeModel(model_name='gemini-1.5-flash')
-        return model
-    except Exception as e:
-        st.error(f"Erro ao configurar IA: {e}")
-        return None
+# 1. Configuração da IA (Direta e Simples)
+if "GEMINI_API_KEY" not in st.secrets:
+    st.error("Configure a GEMINI_API_KEY nos Secrets do Streamlit.")
+else:
+    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+    # Chamada purista do modelo
+    model = genai.GenerativeModel('gemini-1.5-flash')
 
-model = inicializar_modelo()
-
-# 3. Upload do Arquivo
-uploaded_file = st.file_uploader("Arraste o relatório de apostas aqui", type=['csv', 'xlsx'])
+# 2. Upload de Arquivo
+uploaded_file = st.file_uploader("Suba sua planilha (CSV ou Excel)", type=['csv', 'xlsx'])
 
 if uploaded_file is not None:
     try:
-        # Leitura automática
+        # Lendo os dados
         if uploaded_file.name.endswith('.csv'):
             df = pd.read_csv(uploaded_file, sep=None, engine='python')
         else:
             df = pd.read_excel(uploaded_file)
         
-        st.success("Arquivo carregado com sucesso!")
+        st.success(f"Arquivo carregado com {len(df)} linhas.")
         
-        with st.expander("Ver dados brutos"):
-            st.dataframe(df)
-
-        # 4. Botão de Análise
-        if st.button("🚀 Iniciar Análise com IA"):
-            if model is None:
-                st.error("O modelo não foi inicializado. Verifique sua chave API.")
-            else:
-                with st.spinner("Analisando padrões de apostas..."):
-                    # Pegamos as primeiras 150 linhas para uma análise profunda
-                    dados_para_ia = df.head(150).to_string()
-                    
-                    prompt = f"""
-                    Analise os seguintes dados de apostas e identifique comportamentos profissionais ou fraudulentos:
-                    
-                    {dados_para_ia}
-                    
-                    Procure por:
-                    - Apostas repetidas com stakes fixas (ex: 495.00) em ligas pequenas.
-                    - Padrões de Arbitragem (stakes com valores estranhos/quebrados).
-                    - Concentração excessiva em mercados específicos (Vietnã, Indonésia).
-                    
-                    Dê um veredito final sobre o nível de risco deste jogador. Responda em Português.
-                    """
-                    
-                    # Chamada direta
-                    response = model.generate_content(prompt)
-                    
-                    st.markdown("### 📊 Relatório de Auditoria")
-                    st.write(response.text)
-                    
-                    st.download_button(
-                        label="Baixar Relatório",
-                        data=response.text,
-                        file_name="analise_deeprisk.txt",
-                        mime="text/plain"
-                    )
-
+        # Botão de ação
+        if st.button("🚀 Iniciar Análise de IA"):
+            with st.spinner("Analisando comportamentos suspeitos..."):
+                # Enviamos apenas as primeiras 150 linhas para evitar erros de limite
+                dados_texto = df.head(150).to_string()
+                
+                prompt = f"""
+                Analise estes dados de apostas da EstrelaBet e identifique riscos de fraude ou arbitragem:
+                
+                {dados_texto}
+                
+                Destaque:
+                - Apostas repetidas de 495,00 em ligas de baixa liquidez.
+                - Stakes com centavos indicando Surebet.
+                - Veredito final sobre o perfil do usuário.
+                """
+                
+                # Execução da análise
+                response = model.generate_content(prompt)
+                
+                st.markdown("### 📊 Relatório DeepRisk")
+                st.write(response.text)
+                
+                st.download_button(
+                    label="Baixar Relatório em TXT",
+                    data=response.text,
+                    file_name="auditoria_risco.txt",
+                    mime="text/plain"
+                )
+                
     except Exception as e:
-        st.error(f"Erro ao processar o arquivo: {e}")
-else:
-    st.info("Aguardando upload do arquivo para análise.")
+        st.error(f"Erro ao processar arquivo: {e}")
 
 st.markdown("---")
-st.caption("DeepRisk v1.2 - Powered by Gemini 1.5 Flash")
+st.caption("DeepRisk v1.5 - Estabilidade Python 3.11")
