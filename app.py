@@ -4,7 +4,7 @@ import pandas as pd
 import os
 
 # Configuração da página
-st.set_page_config(page_title="DeepRisk - EstrelaBet Analyst", layout="wide")
+st.set_page_config(page_title="DeepRisk Analyst", layout="wide")
 
 # Conectando com a sua chave que você salvou nos Secrets
 if "GEMINI_API_KEY" in st.secrets:
@@ -13,7 +13,7 @@ else:
     st.error("Erro: A chave GEMINI_API_KEY não foi encontrada nos Secrets do Streamlit.")
 
 st.title("🛡️ DeepRisk: Analisador de Risco Avançado")
-st.subheader("Focado em Padrões de Arbitragem e Fraude - EstrelaBet")
+st.subheader("Focado em Padrões de Arbitragem e Fraude")
 
 # Upload do arquivo da Altenar (CSV ou Excel)
 uploaded_file = st.file_uploader("Arraste o relatório de apostas aqui", type=['csv', 'xlsx'])
@@ -51,7 +51,7 @@ if uploaded_file is not None:
                 Resumo estatístico:
                 {resumo_dados}
                 
-                Dê um veredito final claro para a gerência da EstrelaBet.
+                Dê um veredito final claro e detalhado.
                 """
                 
                 model = genai.GenerativeModel('gemini-1.5-flash')
