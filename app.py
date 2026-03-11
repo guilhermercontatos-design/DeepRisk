@@ -10,74 +10,22 @@ st.set_page_config(page_title="DeepRisk - Analisador", layout="wide")
 st.title("🛡️ DeepRisk: Auditoria de Risco Avançada")
 st.markdown("---")
 
-# 2. Configuração das APIs - VERSÃO OTIMIZADA
+# 2. Configuração das APIs
 if "GEMINI_API_KEY" not in st.secrets:
     st.error("ERRO: Configure sua GEMINI_API_KEY nos Secrets.")
     st.stop()
 
 try:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+    model = genai.GenerativeModel('models/gemini-2.5-pro')
     
-    # LISTA OTIMIZADA - APENAS MODELOS 2.0 (que você tem acesso)
-    modelos_para_tentar = [
-        'models/gemini-2.0-flash',      # Modelo principal
-        'models/gemini-2.0-flash-lite',  # Versão mais leve
-        'models/gemini-2.5-flash',       # Tentar 2.5 como fallback
-    ]
-    
-    model = None
-    modelo_escolhido = None
-    erros_encontrados = []
-    
-    # Tentar conectar
-    for modelo_nome in modelos_para_tentar:
-        try:
-            st.write(f"🔄 Tentando conectar com: {modelo_nome}")
-            model_test = genai.GenerativeModel(modelo_nome)
-            
-            # Teste mínimo
-            test_response = model_test.generate_content(
-                "teste",
-                generation_config={"max_output_tokens": 1}
-            )
-            
-            model = model_test
-            modelo_escolhido = modelo_nome
-            st.success(f"✅ Conectado com sucesso: {modelo_nome}")
-            break
-            
-        except Exception as e:
-            erro_msg = str(e)
-            erros_encontrados.append(f"{modelo_nome}: {erro_msg[:100]}...")
-            
-            # Se for erro de cota (429), já avisa
-            if "429" in erro_msg:
-                st.warning(f"⚠️ {modelo_nome} sem cota no momento")
-            continue
-    
-    # Se nenhum modelo funcionou
-    if model is None:
-        st.error("❌ NENHUM MODELO DISPONÍVEL NO MOMENTO")
-        st.info("""
-        ⏰ **O plano gratuito do Gemini tem cotas diárias que resetam.**
-        
-        **O que fazer:**
-        1. **Aguarde algumas horas** e tente novamente
-        2. **Configure faturamento** no Google Cloud para limites maiores
-        3. **Use uma API key diferente** se tiver
-        
-        As cotas geralmente resetam à meia-noite (horário do Pacífico).
-        """)
-        st.stop()
-    
-    # The Odds API
+    # The Odds API (opcional)
     ODDS_API_KEY = "3dd5323db5132e0a04840136ac9f0556"
     ODDS_BASE_URL = "https://api.the-odds-api.com/v4"
     
-    st.success(f"✅ APIs configuradas! Modelo ativo: **{modelo_escolhido}**")
-    
+    st.success("✅ APIs configuradas!")
 except Exception as e:
-    st.error(f"Erro crítico: {e}")
+    st.error(f"Erro na configuração da IA: {e}")
     st.stop()
 
 # 3. Função para processar CSV com aspas
@@ -266,12 +214,12 @@ def validar_odds_com_api(df, odds_api_key):
     
     return odds_inconsistentes
 
-# 6. Interface de Upload
+# 6. Interface de Upload (igual ao antigo)
 uploaded_file = st.file_uploader("Suba sua planilha de apostas Altenar (CSV ou Excel)", type=['csv', 'xlsx'])
 
 if uploaded_file is not None:
     try:
-        # Carregamento inteligente dos dados
+        # Carregamento inteligente dos dados (adaptado para seu formato)
         if uploaded_file.name.endswith('.csv'):
             df = processar_csv_com_aspas(uploaded_file)
         else:
@@ -294,9 +242,9 @@ if uploaded_file is not None:
         with col2:
             st.info(f"🎯 {len(df)} apostas no período")
         
-        # 7. Botão de Auditoria
+        # 7. Botão de Auditoria (igual ao antigo)
         if st.button("🚀 Iniciar Auditoria IA", type="primary", use_container_width=True):
-            with st.spinner(f"O DeepRisk está processando os padrões de risco usando {modelo_escolhido}..."):
+            with st.spinner("O DeepRisk está processando os padrões de risco..."):
                 
                 # Calcular métricas comportamentais
                 metricas = calcular_metricas_comportamentais(df)
@@ -372,11 +320,13 @@ Com base nas métricas acima, analise:
 4. **PADRÕES TEMPORAIS**: O jogador aposta em horários atípicos? Faz apostas em lote?
 5. **LATE ODDS**: Aposta muito próximo ao início dos eventos?
 6. **TAXA DE ACERTO**: Está dentro do normal (45-55%) ou muito acima?
+
 """
 
                 if odds_inconsistentes:
                     prompt += """
 7. **ODDS ERRADAS**: As odds inconsistentes detectadas indicam exploração de latência/erros do sistema?
+
 """
 
                 prompt += """
@@ -398,29 +348,27 @@ Com base em TODOS os padrões identificados, forneça:
 Responda em Português, seja detalhado e profissional.
 """
 
-                # Chamada à IA
-                try:
-                    response = model.generate_content(prompt)
-                    
-                    # Mostrar relatório
-                    st.markdown("### 📊 Relatório de Risco Gerado")
-                    st.info(response.text)
-                    
-                    # Mostrar odds inconsistentes em destaque se houver
-                    if odds_inconsistentes:
-                        with st.expander("🚨 Detalhes das odds inconsistentes encontradas", expanded=True):
-                            st.warning(f"**{len(odds_inconsistentes)} odds inconsistentes detectadas!**")
-                            df_odds = pd.DataFrame(odds_inconsistentes)
-                            st.dataframe(df_odds, use_container_width=True)
-                    
-                    # Botão de download
-                    relatorio_completo = f"""
+                # Chamada à IA (igual ao antigo)
+                response = model.generate_content(prompt)
+                
+                # Mostrar relatório (igual ao antigo)
+                st.markdown("### 📊 Relatório de Risco Gerado")
+                st.info(response.text)
+                
+                # Mostrar odds inconsistentes em destaque se houver
+                if odds_inconsistentes:
+                    with st.expander("🚨 Detalhes das odds inconsistentes encontradas", expanded=True):
+                        st.warning(f"**{len(odds_inconsistentes)} odds inconsistentes detectadas!**")
+                        df_odds = pd.DataFrame(odds_inconsistentes)
+                        st.dataframe(df_odds, use_container_width=True)
+                
+                # Botão de download (igual ao antigo)
+                relatorio_completo = f"""
 RELATÓRIO DEEPRISK - ANÁLISE COMPLETA
 ======================================
 Data: {datetime.now().strftime('%d/%m/%Y %H:%M')}
 Jogador: {jogador if 'jogador' in locals() else 'N/A'}
 Total de apostas: {len(df)}
-Modelo utilizado: {modelo_escolhido}
 
 {response.text}
 
@@ -429,17 +377,14 @@ MÉTRICAS COMPUTACIONAIS:
 
 ODDS INCONSISTENTES: {len(odds_inconsistentes)}
 """
-                    
-                    st.download_button(
-                        label="📄 Baixar Relatório Completo",
-                        data=relatorio_completo,
-                        file_name=f"deeprisk_{datetime.now().strftime('%Y%m%d_%H%M')}.txt",
-                        mime="text/plain"
-                    )
-                    
-                except Exception as e:
-                    st.error(f"Erro ao gerar relatório: {e}")
-                    
+                
+                st.download_button(
+                    label="📄 Baixar Relatório Completo",
+                    data=relatorio_completo,
+                    file_name=f"deeprisk_{datetime.now().strftime('%Y%m%d_%H%M')}.txt",
+                    mime="text/plain"
+                )
+                
     except Exception as e:
         st.error(f"Erro ao ler o arquivo: {e}")
         st.exception(e)
@@ -447,4 +392,4 @@ else:
     st.info("Aguardando upload para iniciar auditoria.")
 
 st.markdown("---")
-st.caption(f"DeepRisk v4.0 - Python 3.11 | Modelo ativo: {modelo_escolhido if 'modelo_escolhido' in locals() else 'N/A'} | Com validação The Odds API")
+st.caption("DeepRisk v3.5 - Python 3.11 | Com validação The Odds API")
