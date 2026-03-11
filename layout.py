@@ -69,7 +69,6 @@ def aplicar_tema_profissional():
             padding: 15px;
             border-radius: 10px;
             margin: 10px 0;
-            backdrop-filter: blur(5px);
         }
         
         .alert-high {
@@ -77,7 +76,6 @@ def aplicar_tema_profissional():
             border-left: 5px solid #FFA64B;
             padding: 15px;
             border-radius: 10px;
-            margin: 10px 0;
         }
         
         .alert-medium {
@@ -85,7 +83,6 @@ def aplicar_tema_profissional():
             border-left: 5px solid #FFD700;
             padding: 15px;
             border-radius: 10px;
-            margin: 10px 0;
         }
         
         .alert-low {
@@ -93,7 +90,6 @@ def aplicar_tema_profissional():
             border-left: 5px solid #4CAF50;
             padding: 15px;
             border-radius: 10px;
-            margin: 10px 0;
         }
         
         /* Títulos com gradiente */
@@ -146,13 +142,6 @@ def aplicar_tema_profissional():
             font-weight: bold;
         }
         
-        /* DataFrame personalizado */
-        .dataframe {
-            background-color: #1E1E2E !important;
-            border-radius: 10px !important;
-            border: 1px solid #3D3D5C !important;
-        }
-        
         /* Tabs personalizadas */
         .stTabs [data-baseweb="tab-list"] {
             gap: 10px;
@@ -177,11 +166,6 @@ def aplicar_tema_profissional():
             border: none;
         }
         
-        /* Sidebar personalizada */
-        .css-1d391kg {
-            background-color: #1E1E2E;
-        }
-        
         /* Headers */
         h1, h2, h3 {
             color: white !important;
@@ -198,38 +182,9 @@ def aplicar_tema_profissional():
             height: 2px;
             border: none;
         }
-        
-        /* Loading personalizado */
-        .stSpinner > div {
-            border-top-color: #9D9DFF !important;
-        }
-        
-        /* Success/Info/Warning/Error boxes */
-        .stSuccess {
-            background-color: #1E4B2E !important;
-            border-left-color: #4CAF50 !important;
-            color: white !important;
-        }
-        
-        .stInfo {
-            background-color: #1E2E4B !important;
-            border-left-color: #4B4BFF !important;
-            color: white !important;
-        }
-        
-        .stWarning {
-            background-color: #4B3D1E !important;
-            border-left-color: #FFA64B !important;
-            color: white !important;
-        }
-        
-        .stError {
-            background-color: #4B1E1E !important;
-            border-left-color: #FF4B4B !important;
-            color: white !important;
-        }
     </style>
     """, unsafe_allow_html=True)
+
 
 # ============================================
 # COMPONENTES VISUAIS REUTILIZÁVEIS
@@ -239,6 +194,7 @@ def titulo_principal():
     """Renderiza o título principal com gradiente"""
     st.markdown('<h1 class="gradient-title">🛡️ DeepRisk Professional</h1>', unsafe_allow_html=True)
     st.markdown('<p style="text-align: center; color: #9D9DFF; margin-bottom: 30px;">Auditoria de Risco e Integridade em Apostas Esportivas</p>', unsafe_allow_html=True)
+
 
 def card_metrica(titulo, valor, delta=None, icone="📊", negativo=False):
     """Cria um card de métrica profissional"""
@@ -252,6 +208,7 @@ def card_metrica(titulo, valor, delta=None, icone="📊", negativo=False):
         {delta_html}
     </div>
     """, unsafe_allow_html=True)
+
 
 def alerta(tipo, titulo, mensagem):
     """Renderiza alertas coloridos por severidade"""
@@ -284,37 +241,6 @@ def alerta(tipo, titulo, mensagem):
         </div>
         """, unsafe_allow_html=True)
 
-def sidebar_profissional():
-    """Renderiza a sidebar com informações do sistema"""
-    with st.sidebar:
-        st.image("https://via.placeholder.com/300x100/1E1E2E/9D9DFF?text=DeepRisk", use_column_width=True)
-        
-        st.markdown("### 🎯 Configurações")
-        
-        sensibilidade = st.select_slider(
-            "Sensibilidade",
-            options=["Baixa", "Média", "Alta", "Crítica"],
-            value="Média"
-        )
-        
-        incluir_api = st.checkbox("🔍 Validar com The Odds API", value=True)
-        
-        st.markdown("---")
-        st.markdown("### 📊 Status do Sistema")
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            st.markdown("**Gemini:**")
-            st.success("✅ Online")
-        with col2:
-            st.markdown("**Odds API:**")
-            st.success("✅ Online")
-        
-        st.markdown("---")
-        st.markdown("### ⏰ Última Análise")
-        st.caption(f"{datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
-        
-        return sensibilidade, incluir_api
 
 def footer_profissional():
     """Renderiza o rodapé profissional"""
@@ -324,18 +250,19 @@ def footer_profissional():
     with col1:
         st.markdown("**🛡️ DeepRisk v4.0**")
         st.caption("© 2026 - Todos direitos reservados")
-
+    
     with col2:
         st.markdown("**📧 Suporte**")
         st.caption("suporte@deeprisk.com")
-
+    
     with col3:
         st.markdown("**🔒 Segurança**")
         st.caption("ISO 27001 Certified")
-
+    
     with col4:
         st.markdown("**📊 Versão**")
         st.caption("Enterprise Edition")
+
 
 # ============================================
 # GRÁFICOS PROFISSIONAIS
@@ -362,6 +289,7 @@ def grafico_distribuicao_horarios(df):
     fig.update_yaxes(gridcolor='#3D3D5C')
     return fig
 
+
 def grafico_distribuicao_valores(df):
     """Gráfico de distribuição de valores"""
     fig = px.box(
@@ -378,6 +306,7 @@ def grafico_distribuicao_valores(df):
         title_font_color='#9D9DFF'
     )
     return fig
+
 
 def grafico_timeline_apostas(df):
     """Timeline de apostas interativa"""
@@ -399,31 +328,6 @@ def grafico_timeline_apostas(df):
     )
     return fig
 
-def grafico_pizza_riscos(metricas):
-    """Gráfico de pizza para composição de riscos"""
-    labels = ['Crítico', 'Alto', 'Médio', 'Baixo']
-    values = [
-        metricas.get('alertas_criticos', 0),
-        metricas.get('alertas_altos', 0),
-        metricas.get('alertas_medios', 0),
-        metricas.get('alertas_baixos', 0)
-    ]
-    
-    fig = go.Figure(data=[go.Pie(
-        labels=labels,
-        values=values,
-        hole=.4,
-        marker_colors=['#FF4B4B', '#FFA64B', '#FFD700', '#4CAF50']
-    )])
-    
-    fig.update_layout(
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(0,0,0,0)',
-        font_color='white',
-        title_font_color='#9D9DFF',
-        title="⚖️ Composição de Riscos"
-    )
-    return fig
 
 def grafico_top_ligas(df):
     """Gráfico das ligas mais apostadas"""
