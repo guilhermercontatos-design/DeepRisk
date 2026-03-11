@@ -5,30 +5,95 @@ from datetime import datetime
 import requests
 import time
 
-# 1. Configurações da Página
-st.set_page_config(page_title="DeepRisk - Analisador", layout="wide")
-st.title("🛡️ DeepRisk: Auditoria de Risco Avançada")
-st.markdown("---")
+# ⚡ IMPORTAR O LAYOUT PROFISSIONAL
+from layout import *
 
-# 2. Configuração das APIs
+# ============================================
+# CONFIGURAÇÃO INICIAL
+# ============================================
+
+# Aplicar tema profissional
+aplicar_tema_profissional()
+
+# Título principal com estilo
+titulo_principal()
+
+# ============================================
+# CONFIGURAÇÃO DAS APIS
+# ============================================
+
 if "GEMINI_API_KEY" not in st.secrets:
-    st.error("ERRO: Configure sua GEMINI_API_KEY nos Secrets.")
+    st.error("ERROR: Configure sua GEMINI_API_KEY nos Secrets.")
     st.stop()
 
 try:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-    model = genai.GenerativeModel('models/gemini-2.5-pro')
     
-    # The Odds API (opcional)
+    # Lista de modelos para tentar
+    modelos_para_tentar = [
+        'models/gemini-2.0-flash',
+        'models/gemini-2.0-flash-lite',
+        'models/gemini-2.5-flash',
+    ]
+    
+    model = None
+    modelo_escolhido = None
+    
+    # Barra de progresso para tentativas
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    for idx, modelo_nome in enumerate(modelos_para_tentar):
+        progress_bar.progress((idx + 1) / len(modelos_para_tentar))
+        status_text.text(f"🔄 Tentando conectar com: {modelo_nome}")
+        
+        try:
+            model_test = genai.GenerativeModel(modelo_nome)
+            test_response = model_test.generate_content(
+                "teste",
+                generation_config={"max_output_tokens": 1}
+            )
+            model = model_test
+            modelo_escolhido = modelo_nome
+            status_text.text(f"✅ Conectado: {modelo_nome}")
+            break
+            
+        except Exception as e:
+            if "429" in str(e):
+                status_text.text(f"⚠️ {modelo_nome} sem cota")
+            continue
+    
+    # Limpar progresso
+    progress_bar.empty()
+    status_text.empty()
+    
+    # Verificar se conectou
+    if model is None:
+        st.error("❌ NENHUM MODELO DISPONÍVEL NO MOMENTO")
+        st.info("""
+        ⏰ **O plano gratuito do Gemini tem cotas diárias que resetam.**
+        
+        **O que fazer:**
+        1. Aguarde algumas horas e tente novamente
+        2. Configure faturamento no Google Cloud para limites maiores
+        3. Use uma API key diferente se tiver
+        """)
+        st.stop()
+    
+    # The Odds API
     ODDS_API_KEY = "3dd5323db5132e0a04840136ac9f0556"
     ODDS_BASE_URL = "https://api.the-odds-api.com/v4"
     
-    st.success("✅ APIs configuradas!")
+    st.success(f"✅ APIs configuradas! Modelo ativo: **{modelo_escolhido}**")
+    
 except Exception as e:
-    st.error(f"Erro na configuração da IA: {e}")
+    st.error(f"Erro na configuração: {e}")
     st.stop()
 
-# 3. Função para processar CSV com aspas
+# ============================================
+# FUNÇÕES DE PROCESSAMENTO
+# ============================================
+
 def processar_csv_com_aspas(arquivo):
     """Processa CSV que tem aspas duplas no início e fim"""
     content = arquivo.read().decode('utf-8')
@@ -64,7 +129,7 @@ def processar_csv_com_aspas(arquivo):
     
     return df
 
-# 4. Função para calcular métricas comportamentais
+
 def calcular_metricas_comportamentais(df):
     """Calcula todas as métricas de comportamento do jogador"""
     
@@ -107,7 +172,6 @@ def calcular_metricas_comportamentais(df):
         
         metricas['apostas_madrugada'] = len(df[df['hora'].between(0, 5)])
         
-        # Apostas em lote
         apostas_por_minuto = df.groupby('minuto_exato').size()
         minutos_lote = apostas_por_minuto[apostas_por_minuto > 2]
         metricas['apostas_em_lote'] = minutos_lote.sum() if len(minutos_lote) > 0 else 0
@@ -133,7 +197,7 @@ def calcular_metricas_comportamentais(df):
     
     return metricas
 
-# 5. Função para validar odds com API
+
 def validar_odds_com_api(df, odds_api_key):
     """Valida odds usando The Odds API"""
     
@@ -178,12 +242,10 @@ def validar_odds_com_api(df, odds_api_key):
                         odds_apostada = float(aposta['Bet prices'])
                         nome_evento = aposta['Bet events']
                         
-                        # Procurar evento correspondente
                         for evento in eventos:
                             evento_nome = f"{evento['home_team']} vs {evento['away_team']}"
                             if any(time.lower() in nome_evento.lower() for time in [evento['home_team'], evento['away_team']]):
                                 
-                                # Coletar odds do mercado
                                 odds_list = []
                                 for bookmaker in evento.get('bookmakers', []):
                                     for market in bookmaker.get('markets', []):
@@ -194,7 +256,7 @@ def validar_odds_com_api(df, odds_api_key):
                                     odds_media = sum(odds_list) / len(odds_list)
                                     desvio = ((odds_apostada - odds_media) / odds_media) * 100
                                     
-                                    if abs(desvio) > 15:  # Desvio significativo
+                                    if abs(desvio) > 15:
                                         odds_inconsistentes.append({
                                             'Bet ID': aposta['Bet id'],
                                             'Evento': nome_evento,
@@ -205,7 +267,7 @@ def validar_odds_com_api(df, odds_api_key):
                                         })
                                 break
                     
-                    time.sleep(0.2)  # Delay para não sobrecarregar
+                    time.sleep(0.2)
                     
                 except Exception as e:
                     continue
@@ -214,182 +276,210 @@ def validar_odds_com_api(df, odds_api_key):
     
     return odds_inconsistentes
 
-# 6. Interface de Upload (igual ao antigo)
-uploaded_file = st.file_uploader("Suba sua planilha de apostas Altenar (CSV ou Excel)", type=['csv', 'xlsx'])
+
+# ============================================
+# INTERFACE PRINCIPAL
+# ============================================
+
+st.markdown("### 📤 Upload da Betlist")
+uploaded_file = st.file_uploader(
+    "Arraste ou selecione o arquivo CSV/Excel",
+    type=['csv', 'xlsx'],
+    help="Formatos aceitos: CSV, XLSX"
+)
 
 if uploaded_file is not None:
     try:
-        # Carregamento inteligente dos dados (adaptado para seu formato)
+        # Carregar dados
         if uploaded_file.name.endswith('.csv'):
             df = processar_csv_com_aspas(uploaded_file)
         else:
             df = pd.read_excel(uploaded_file)
         
-        st.success(f"✅ Arquivo carregado com sucesso! {len(df)} linhas identificadas.")
+        st.success(f"✅ Arquivo carregado! {len(df)} apostas")
         
         # Identificar jogador
         if 'Player name' in df.columns:
             jogador = df['Player name'].iloc[0]
-            st.subheader(f"📊 Analisando jogador: **{jogador}**")
+            st.markdown(f"### 📊 Analisando jogador: **{jogador}**")
         
-        with st.expander("👁️ Clique para conferir os dados brutos"):
-            st.dataframe(df.head(20))
+        with st.expander("👁️ Visualizar dados brutos"):
+            st.dataframe(df.head(10))
         
-        # Opções de análise
-        col1, col2 = st.columns([3, 1])
-        with col1:
-            validar_com_api = st.checkbox("🔍 Validar odds com The Odds API (recomendado)", value=True)
-        with col2:
-            st.info(f"🎯 {len(df)} apostas no período")
+        # Opção de validação com API
+        validar_api = st.checkbox("🔍 Validar odds com The Odds API", value=True)
         
-        # 7. Botão de Auditoria (igual ao antigo)
-        if st.button("🚀 Iniciar Auditoria IA", type="primary", use_container_width=True):
-            with st.spinner("O DeepRisk está processando os padrões de risco..."):
+        # Tabs organizadas
+        tab1, tab2, tab3, tab4 = st.tabs([
+            "📊 Visão Geral",
+            "🎲 Análise de Odds",
+            "🌏 Padrões Geográficos",
+            "🚨 Alertas"
+        ])
+        
+        with tab1:
+            # Cards de métricas
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                if 'Total stake' in df.columns:
+                    card_metrica(
+                        "Total Apostas",
+                        f"{len(df)}",
+                        f"Período: {df['Created date'].min().strftime('%d/%m') if 'Created date' in df.columns else 'N/A'} a {df['Created date'].max().strftime('%d/%m') if 'Created date' in df.columns else 'N/A'}"
+                    )
+                    
+                    card_metrica(
+                        "Valor Total",
+                        f"R$ {df['Total stake'].sum():,.2f}",
+                        f"Média: R$ {df['Total stake'].mean():.2f}"
+                    )
+            
+            with col2:
+                if 'Bet status' in df.columns:
+                    ganhas = len(df[df['Bet status'] == 'Ganha'])
+                    taxa = (ganhas / len(df)) * 100
+                    card_metrica(
+                        "Taxa de Acerto",
+                        f"{taxa:.1f}%",
+                        f"{ganhas} ganhas / {len(df)-ganhas} perdidas"
+                    )
                 
-                # Calcular métricas comportamentais
+                card_metrica(
+                    "Modelo Ativo",
+                    modelo_escolhido.split('/')[-1],
+                    "Gemini 2.0"
+                )
+            
+            # Gráficos
+            if 'hora' in df.columns:
+                st.plotly_chart(grafico_distribuicao_horarios(df), use_container_width=True)
+            
+            col_g1, col_g2 = st.columns(2)
+            with col_g1:
+                if 'Total stake' in df.columns:
+                    st.plotly_chart(grafico_distribuicao_valores(df), use_container_width=True)
+            
+            with col_g2:
+                if 'Bet champs' in df.columns:
+                    st.plotly_chart(grafico_top_ligas(df), use_container_width=True)
+        
+        with tab2:
+            if 'Bet prices' in df.columns:
+                st.subheader("🎲 Análise de Odds")
+                
+                col_o1, col_o2, col_o3 = st.columns(3)
+                with col_o1:
+                    card_metrica("Odds Média", f"{df['Bet prices'].mean():.2f}")
+                with col_o2:
+                    card_metrica("Odds Máxima", f"{df['Bet prices'].max():.2f}")
+                with col_o3:
+                    card_metrica("Odds Mínima", f"{df['Bet prices'].min():.2f}")
+        
+        with tab3:
+            if 'Bet champs' in df.columns:
+                st.subheader("🌏 Distribuição por Liga")
+                ligas_df = df['Bet champs'].value_counts().reset_index()
+                ligas_df.columns = ['Liga', 'Quantidade']
+                st.dataframe(ligas_df, use_container_width=True)
+        
+        with tab4:
+            st.subheader("🚨 Alertas Detectados")
+            
+            # Detectar padrões suspeitos
+            if 'Total stake' in df.columns:
+                apostas_495 = len(df[df['Total stake'] == 495.00])
+                if apostas_495 > 0:
+                    alerta("ALTO", "Valor Fixo Suspeito", 
+                          f"{apostas_495} apostas de R$ 495,00 detectadas")
+        
+        # Botão de análise completa
+        if st.button("🚀 INICIAR ANÁLISE COMPLETA", use_container_width=True):
+            with st.spinner("🔍 DeepRisk analisando padrões comportamentais..."):
+                
+                # Calcular métricas
                 metricas = calcular_metricas_comportamentais(df)
                 
-                # Validar odds com API se solicitado
+                # Validar odds com API
                 odds_inconsistentes = []
-                if validar_com_api:
+                if validar_api:
                     odds_inconsistentes = validar_odds_com_api(df, ODDS_API_KEY)
                 
-                # Preparar dados para a IA
+                # Preparar prompt para IA
                 dados_audit = df.head(50).to_string()
                 
-                # Construir prompt com todas as métricas
                 prompt = f"""
 Você é um especialista sênior em integridade de apostas esportivas da Altenar.
 
 ANÁLISE COMPORTAMENTAL DO JOGADOR:
 ===================================
 Total de apostas: {metricas.get('total_apostas', 0)}
-Período analisado: {df['Created date'].min().strftime('%d/%m/%Y') if 'Created date' in df.columns else 'N/A'} a {df['Created date'].max().strftime('%d/%m/%Y') if 'Created date' in df.columns else 'N/A'}
-
-📊 **MÉTRICAS DE APOSTAS:**
-- Valor médio: R$ {metricas.get('valor_medio', 0):.2f}
-- Valor mínimo: R$ {metricas.get('valor_min', 0):.2f}
-- Valor máximo: R$ {metricas.get('valor_max', 0):.2f}
-- Apostas de R$ 495,00: {metricas.get('apostas_495', 0)} ({metricas.get('percentual_495', 0):.1f}% do total)
-
-🌏 **ANÁLISE DE LIGAS:**
-- Apostas em ligas suspeitas: {metricas.get('apostas_ligas_suspeitas', 0)}
-- Ligas diferentes: {metricas.get('ligas_unicas', 0)}
-- Top 3 ligas: {metricas.get('top_ligas', {})}
-
-🎲 **ANÁLISE DE ODDS:**
-- Odds quebradas (arbitragem): {metricas.get('apostas_odds_quebradas', 0)}
-- Odds média: {metricas.get('odds_media', 0):.2f}
-- Odds mínima: {metricas.get('odds_min', 0):.2f}
-- Odds máxima: {metricas.get('odds_max', 0):.2f}
-
-⏰ **ANÁLISE TEMPORAL:**
-- Apostas na madrugada (0h-5h): {metricas.get('apostas_madrugada', 0)}
-- Apostas em lote (mesmo minuto): {metricas.get('apostas_em_lote', 0)}
-- Eventos com múltiplas apostas: {metricas.get('eventos_com_multiplas_apostas', 0)}
-
-⚡ **LATE ODDS:**
-- Apostas na última hora: {metricas.get('apostas_ultima_hora', 0)}
-
-📈 **TAXA DE ACERTO:**
-- Apostas ganhas: {metricas.get('apostas_ganhas', 0)}
-- Apostas perdidas: {metricas.get('apostas_perdidas', 0)}
-- Taxa de acerto: {metricas.get('taxa_acerto', 0):.1f}%
-
-"""
-
-                # Adicionar seção de odds inconsistentes se houver
-                if odds_inconsistentes:
-                    prompt += f"""
-🚨 **ODDS INCONSISTENTES DETECTADAS (VALIDAÇÃO COM THE ODDS API):**
-Total de odds inconsistentes: {len(odds_inconsistentes)}
-
-Detalhes:
-{chr(10).join([f"- Aposta {o['Bet ID']}: {o['Evento']} | Odds: {o['Odds Apostada']} vs Média: {o['Odds Média']} | Desvio: {o['Desvio %']}% {o['Classificação']}" for o in odds_inconsistentes])}
-
-"""
-
-                prompt += """
-ANÁLISE COMPORTAMENTAL DETALHADA:
-================================
-Com base nas métricas acima, analise:
-
-1. **PADRÕES DE VALOR**: Existe concentração em valores específicos? O valor de R$495,00 aparece com frequência?
-2. **PADRÕES DE LIGAS**: Há concentração em ligas de baixa liquidez? Quais?
-3. **PADRÕES DE ODDS**: As odds são quebradas (padrão de arbitragem)?
-4. **PADRÕES TEMPORAIS**: O jogador aposta em horários atípicos? Faz apostas em lote?
-5. **LATE ODDS**: Aposta muito próximo ao início dos eventos?
-6. **TAXA DE ACERTO**: Está dentro do normal (45-55%) ou muito acima?
-
-"""
-
-                if odds_inconsistentes:
-                    prompt += """
-7. **ODDS ERRADAS**: As odds inconsistentes detectadas indicam exploração de latência/erros do sistema?
-
-"""
-
-                prompt += """
-Com base em TODOS os padrões identificados, forneça:
-
-📋 **RELATÓRIO EXECUTIVO:**
-- Perfil do jogador (RECREATIVO, PROFISSIONAL, ARBITRADOR ou CRÍTICO)
-- Principais padrões de risco identificados
-- Evidências concretas dos padrões
-
-⚠️ **NÍVEL DE RISCO:**
-[BAIXO | MÉDIO | ALTO | CRÍTICO]
-
-🎯 **RECOMENDAÇÕES DE AÇÃO:**
-- O que fazer com este jogador?
-- Precisa de monitoramento?
-- Deve ser bloqueado?
-
-Responda em Português, seja detalhado e profissional.
-"""
-
-                # Chamada à IA (igual ao antigo)
-                response = model.generate_content(prompt)
-                
-                # Mostrar relatório (igual ao antigo)
-                st.markdown("### 📊 Relatório de Risco Gerado")
-                st.info(response.text)
-                
-                # Mostrar odds inconsistentes em destaque se houver
-                if odds_inconsistentes:
-                    with st.expander("🚨 Detalhes das odds inconsistentes encontradas", expanded=True):
-                        st.warning(f"**{len(odds_inconsistentes)} odds inconsistentes detectadas!**")
-                        df_odds = pd.DataFrame(odds_inconsistentes)
-                        st.dataframe(df_odds, use_container_width=True)
-                
-                # Botão de download (igual ao antigo)
-                relatorio_completo = f"""
-RELATÓRIO DEEPRISK - ANÁLISE COMPLETA
-======================================
-Data: {datetime.now().strftime('%d/%m/%Y %H:%M')}
-Jogador: {jogador if 'jogador' in locals() else 'N/A'}
-Total de apostas: {len(df)}
-
-{response.text}
-
-MÉTRICAS COMPUTACIONAIS:
-{chr(10).join([f"{k}: {v}" for k, v in metricas.items()])}
+Taxa de acerto: {metricas.get('taxa_acerto', 0):.1f}%
+Apostas R$495: {metricas.get('apostas_495', 0)} ({metricas.get('percentual_495', 0):.1f}%)
+Ligas suspeitas: {metricas.get('apostas_ligas_suspeitas', 0)}
+Odds quebradas: {metricas.get('apostas_odds_quebradas', 0)}
+Apostas última hora: {metricas.get('apostas_ultima_hora', 0)}
+Eventos repetidos: {metricas.get('eventos_com_multiplas_apostas', 0)}
 
 ODDS INCONSISTENTES: {len(odds_inconsistentes)}
+
+Com base nestes dados, forneça:
+1. Perfil do jogador (RECREATIVO, PROFISSIONAL, ARBITRADOR)
+2. Principais riscos identificados
+3. Recomendações de ação
 """
                 
-                st.download_button(
-                    label="📄 Baixar Relatório Completo",
-                    data=relatorio_completo,
-                    file_name=f"deeprisk_{datetime.now().strftime('%Y%m%d_%H%M')}.txt",
-                    mime="text/plain"
-                )
-                
+                # Chamar IA
+                try:
+                    response = model.generate_content(prompt)
+                    st.markdown("### 📊 Relatório Gerado")
+                    st.info(response.text)
+                    st.balloons()
+                except Exception as e:
+                    st.error(f"Erro na IA: {e}")
+        
     except Exception as e:
-        st.error(f"Erro ao ler o arquivo: {e}")
+        st.error(f"Erro ao processar arquivo: {e}")
         st.exception(e)
-else:
-    st.info("Aguardando upload para iniciar auditoria.")
 
-st.markdown("---")
-st.caption("DeepRisk v3.5 - Python 3.11 | Com validação The Odds API")
+else:
+    # Estado inicial com cards bonitos
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        card_metrica(
+            "Total Análises",
+            "247",
+            "Últimos 30 dias",
+            "📊"
+        )
+    
+    with col2:
+        card_metrica(
+            "Alertas Ativos",
+            "3",
+            "2 críticos",
+            "🚨"
+        )
+    
+    with col3:
+        card_metrica(
+            "Economia",
+            "R$ 5.240",
+            "+12% este mês",
+            "💰"
+        )
+    
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown("""
+    <div style="text-align: center; padding: 50px; background: linear-gradient(135deg, #1E1E2E20 0%, #2D2D4420 100%); border-radius: 20px; border: 1px dashed #3D3D5C;">
+        <h3 style="color: #9D9DFF;">📤 Aguardando Upload</h3>
+        <p style="color: #CCCCCC;">Arraste um arquivo CSV ou Excel para iniciar a análise</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+# ============================================
+# RODAPÉ
+# ============================================
+
+footer_profissional()
