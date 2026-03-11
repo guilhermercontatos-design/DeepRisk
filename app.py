@@ -1,18 +1,18 @@
 import streamlit as st
 import pandas as pd
 import google.generativeai as genai
-from datetime import datetime, timedelta
-import numpy as np
+from datetime import datetime
 import requests
+import time
 
 # 1. Configurações da Página
-st.set_page_config(page_title="DeepRisk - Analisador Comportamental", layout="wide")
-st.title("🛡️ DeepRisk: Auditoria Comportamental Avançada")
+st.set_page_config(page_title="DeepRisk - Analisador", layout="wide")
+st.title("🛡️ DeepRisk: Auditoria de Risco Avançada")
 st.markdown("---")
 
 # 2. Configuração das APIs
 if "GEMINI_API_KEY" not in st.secrets:
-    st.error("⚠️ Configure sua GEMINI_API_KEY nos Secrets do Streamlit!")
+    st.error("ERRO: Configure sua GEMINI_API_KEY nos Secrets.")
     st.stop()
 
 try:
@@ -21,397 +21,375 @@ try:
     
     # The Odds API (opcional)
     ODDS_API_KEY = "3dd5323db5132e0a04840136ac9f0556"
+    ODDS_BASE_URL = "https://api.the-odds-api.com/v4"
     
     st.success("✅ APIs configuradas!")
 except Exception as e:
-    st.error(f"Erro na configuração: {e}")
+    st.error(f"Erro na configuração da IA: {e}")
     st.stop()
 
-# 3. FUNÇÕES DE ANÁLISE COMPORTAMENTAL
-class AnalisadorComportamental:
-    """Classe que encapsula TODAS as análises de padrões de apostas"""
+# 3. Função para processar CSV com aspas
+def processar_csv_com_aspas(arquivo):
+    """Processa CSV que tem aspas duplas no início e fim"""
+    content = arquivo.read().decode('utf-8')
+    lines = content.strip().split('\n')
     
-    def __init__(self, df):
-        self.df = df.copy()
-        self.resultados = {}
-        self.padroes_detectados = []
-        self._preparar_dados()
+    # Processar cabeçalho
+    header_line = lines[0].strip()
+    if header_line.startswith('"') and header_line.endswith('"'):
+        header_line = header_line.strip('"')
+    header = header_line.split(',')
     
-    def _preparar_dados(self):
-        """Prepara os dados para análise"""
-        # Converter datas
-        for col in ['Created date', 'Bet event date', 'Settlement date']:
-            if col in self.df.columns:
-                self.df[col] = pd.to_datetime(self.df[col], errors='coerce')
-        
-        # Calcular métricas básicas
-        if 'Created date' in self.df.columns:
-            self.df['hora'] = self.df['Created date'].dt.hour
-            self.df['dia_semana'] = self.df['Created date'].dt.day_name()
-        
-        if 'Bet event date' in self.df.columns and 'Created date' in self.df.columns:
-            self.df['tempo_antecedencia'] = (self.df['Bet event date'] - self.df['Created date']).dt.total_seconds() / 3600
+    # Processar dados
+    data = []
+    for line in lines[1:]:
+        if line.strip():
+            clean_line = line.strip()
+            if clean_line.startswith('"') and clean_line.endswith('"'):
+                clean_line = clean_line.strip('"')
+            values = clean_line.split(',')
+            data.append(values)
     
-    def analisar_valores_suspeitos(self, limiar=495.0):
-        """Detecta apostas com valores fixos suspeitos"""
-        if 'Total stake' not in self.df.columns:
-            return
-        
-        apostas_fixas = self.df[self.df['Total stake'] == limiar]
-        
-        if len(apostas_fixas) > 0:
-            percentual = (len(apostas_fixas) / len(self.df)) * 100
-            self.padroes_detectados.append({
-                'padrao': '💰 VALOR FIXO SUSPEITO',
-                'severidade': 'ALTA' if percentual > 30 else 'MÉDIA' if percentual > 15 else 'BAIXA',
-                'descricao': f"{len(apostas_fixas)} apostas com valor R$ {limiar:.2f} ({percentual:.1f}% do total)",
-                'dados': apostas_fixas[['Bet id', 'Bet events', 'Total stake', 'Bet status']] if len(apostas_fixas) > 0 else None
-            })
+    df = pd.DataFrame(data, columns=header)
     
-    def analisar_ligas_baixa_liquidez(self, ligas_suspeitas=None):
-        """Detecta concentração em ligas de baixa liquidez"""
-        if 'Bet champs' not in self.df.columns:
-            return
-        
-        if ligas_suspeitas is None:
-            ligas_suspeitas = ['Vietnam', 'Indonésia', 'Mianmar', 'Camboja', 'Laos', 
-                              'Filipinas', 'Timor', 'Brunei', 'Singapura', 'Tailândia',
-                              'Malásia', 'Myanmar']
-        
+    # Converter colunas numéricas
+    for col in ['Bet prices', 'Total stake', 'Real win']:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+    
+    # Converter datas
+    for col in ['Created date', 'Bet event date', 'Settlement date']:
+        if col in df.columns:
+            df[col] = pd.to_datetime(df[col], errors='coerce')
+    
+    return df
+
+# 4. Função para calcular métricas comportamentais
+def calcular_metricas_comportamentais(df):
+    """Calcula todas as métricas de comportamento do jogador"""
+    
+    metricas = {}
+    
+    # 1. Análise de valores
+    if 'Total stake' in df.columns:
+        metricas['total_apostas'] = len(df)
+        metricas['valor_medio'] = df['Total stake'].mean()
+        metricas['valor_min'] = df['Total stake'].min()
+        metricas['valor_max'] = df['Total stake'].max()
+        metricas['apostas_495'] = len(df[df['Total stake'] == 495.00])
+        metricas['percentual_495'] = (metricas['apostas_495'] / len(df)) * 100 if len(df) > 0 else 0
+    
+    # 2. Análise de ligas
+    if 'Bet champs' in df.columns:
+        ligas_suspeitas = ['Vietnam', 'Indonésia', 'Mianmar', 'Camboja', 'Laos', 
+                          'Filipinas', 'Timor', 'Brunei', 'Singapura', 'Tailândia',
+                          'Malásia', 'Myanmar']
         padrao = '|'.join(ligas_suspeitas)
-        apostas_suspeitas = self.df[self.df['Bet champs'].str.contains(padrao, case=False, na=False)]
-        
-        if len(apostas_suspeitas) > 0:
-            percentual = (len(apostas_suspeitas) / len(self.df)) * 100
-            self.padroes_detectados.append({
-                'padrao': '🌏 LIGAS DE BAIXA LIQUIDEZ',
-                'severidade': 'ALTA' if percentual > 50 else 'MÉDIA' if percentual > 25 else 'BAIXA',
-                'descricao': f"{len(apostas_suspeitas)} apostas em ligas suspeitas ({percentual:.1f}%)",
-                'dados': apostas_suspeitas[['Bet id', 'Bet champs', 'Bet events', 'Bet prices']] if len(apostas_suspeitas) > 0 else None
-            })
+        metricas['apostas_ligas_suspeitas'] = len(df[df['Bet champs'].str.contains(padrao, case=False, na=False)])
+        metricas['ligas_unicas'] = df['Bet champs'].nunique()
+        metricas['top_ligas'] = df['Bet champs'].value_counts().head(3).to_dict()
     
-    def analisar_odds_quebradas(self):
-        """Detecta padrão de arbitragem (odds com muitos decimais)"""
-        if 'Bet prices' not in self.df.columns:
-            return
-        
-        self.df['odds_quebradas'] = self.df['Bet prices'].apply(
+    # 3. Análise de odds
+    if 'Bet prices' in df.columns:
+        df['odds_quebradas'] = df['Bet prices'].apply(
             lambda x: len(str(x).split('.')[-1]) > 2 if '.' in str(x) else False
         )
-        
-        apostas_quebradas = self.df[self.df['odds_quebradas'] == True]
-        
-        if len(apostas_quebradas) > 0:
-            percentual = (len(apostas_quebradas) / len(self.df)) * 100
-            self.padroes_detectados.append({
-                'padrao': '🎲 ODDS QUEBRADAS (ARBITRAGEM)',
-                'severidade': 'MÉDIA' if percentual > 40 else 'BAIXA',
-                'descricao': f"{len(apostas_quebradas)} apostas com odds quebradas ({percentual:.1f}%)",
-                'dados': apostas_quebradas[['Bet id', 'Bet events', 'Bet prices']] if len(apostas_quebradas) > 0 else None
-            })
+        metricas['apostas_odds_quebradas'] = len(df[df['odds_quebradas'] == True])
+        metricas['odds_media'] = df['Bet prices'].mean()
+        metricas['odds_min'] = df['Bet prices'].min()
+        metricas['odds_max'] = df['Bet prices'].max()
     
-    def analisar_padrao_temporal(self):
-        """Analisa horários e frequência das apostas"""
-        if 'hora' not in self.df.columns:
-            return
+    # 4. Análise temporal
+    if 'Created date' in df.columns:
+        df['hora'] = df['Created date'].dt.hour
+        df['dia_semana'] = df['Created date'].dt.day_name()
+        df['minuto_exato'] = df['Created date'].dt.floor('min')
         
-        # Apostas em horário comercial vs madrugada
-        apostas_madrugada = self.df[self.df['hora'].between(0, 5)]
+        metricas['apostas_madrugada'] = len(df[df['hora'].between(0, 5)])
         
-        if len(apostas_madrugada) > 0:
-            percentual = (len(apostas_madrugada) / len(self.df)) * 100
-            if percentual > 30:
-                self.padroes_detectados.append({
-                    'padrao': '🌙 PADRÃO NOTURNO',
-                    'severidade': 'MÉDIA',
-                    'descricao': f"{len(apostas_madrugada)} apostas entre 0h-5h ({percentual:.1f}%)",
-                    'dados': apostas_madrugada[['Bet id', 'Created date', 'Bet events']] if len(apostas_madrugada) > 0 else None
-                })
-        
-        # Apostas em lote (mesmo minuto)
-        if 'Created date' in self.df.columns:
-            self.df['minuto_exato'] = self.df['Created date'].dt.floor('min')
-            apostas_por_minuto = self.df.groupby('minuto_exato').size()
-            minutos_lote = apostas_por_minuto[apostas_por_minuto > 2]
-            
-            if len(minutos_lote) > 0:
-                total_apostas_lote = minutos_lote.sum()
-                percentual_lote = (total_apostas_lote / len(self.df)) * 100
-                if percentual_lote > 20:
-                    self.padroes_detectados.append({
-                        'padrao': '⏰ APOSTAS EM LOTE',
-                        'severidade': 'ALTA',
-                        'descricao': f"{total_apostas_lote} apostas feitas no mesmo minuto ({percentual_lote:.1f}%)",
-                        'dados': self.df[self.df['minuto_exato'].isin(minutos_lote.index)][['Bet id', 'Created date', 'Bet events']] if len(minutos_lote) > 0 else None
-                    })
+        # Apostas em lote
+        apostas_por_minuto = df.groupby('minuto_exato').size()
+        minutos_lote = apostas_por_minuto[apostas_por_minuto > 2]
+        metricas['apostas_em_lote'] = minutos_lote.sum() if len(minutos_lote) > 0 else 0
+        metricas['total_minutos_lote'] = len(minutos_lote)
     
-    def analisar_late_odds(self):
-        """Detecta apostas de última hora (potencial latência)"""
-        if 'tempo_antecedencia' not in self.df.columns:
-            return
-        
-        # Apostas feitas na última hora
-        ultima_hora = self.df[self.df['tempo_antecedencia'] <= 1]
+    # 5. Late odds
+    if 'Bet event date' in df.columns and 'Created date' in df.columns:
+        df['tempo_antecedencia'] = (df['Bet event date'] - df['Created date']).dt.total_seconds() / 3600
+        ultima_hora = df[df['tempo_antecedencia'] <= 1]
+        metricas['apostas_ultima_hora'] = len(ultima_hora)
         
         if len(ultima_hora) > 0:
-            percentual = (len(ultima_hora) / len(self.df)) * 100
-            
-            # Verificar se o mesmo usuário apostou várias vezes no mesmo evento
-            apostas_por_evento = ultima_hora.groupby('Bet events').size()
-            eventos_repetidos = apostas_por_evento[apostas_por_evento > 1]
-            
-            if len(eventos_repetidos) > 0:
-                self.padroes_detectados.append({
-                    'padrao': '⚡ LATE ODDS EXPLOITATION',
-                    'severidade': 'CRÍTICA',
-                    'descricao': f"{len(eventos_repetidos)} eventos com múltiplas apostas na última hora",
-                    'dados': ultima_hora[ultima_hora['Bet events'].isin(eventos_repetidos.index)][['Bet id', 'Bet events', 'Created date', 'Bet event date', 'Bet prices']] if len(eventos_repetidos) > 0 else None
-                })
-    
-    def analisar_taxa_acerto(self):
-        """Analisa se a taxa de acerto é anormalmente alta"""
-        if 'Bet status' not in self.df.columns:
-            return
-        
-        total = len(self.df)
-        ganhas = len(self.df[self.df['Bet status'] == 'Ganha'])
-        taxa_acerto = (ganhas / total) * 100 if total > 0 else 0
-        
-        if taxa_acerto > 55:  # Acima do normal
-            severidade = 'CRÍTICA' if taxa_acerto > 65 else 'ALTA' if taxa_acerto > 60 else 'MÉDIA'
-            self.padroes_detectados.append({
-                'padrao': '📊 TAXA DE ACERTO ANORMAL',
-                'severidade': severidade,
-                'descricao': f"Taxa de acerto de {taxa_acerto:.1f}% ({ganhas} ganhas em {total})",
-                'dados': None
-            })
-    
-    def gerar_relatorio_completo(self):
-        """Executa todas as análises e gera relatório consolidado"""
-        
-        # Executar todas as análises
-        self.analisar_valores_suspeitos()
-        self.analisar_ligas_baixa_liquidez()
-        self.analisar_odds_quebradas()
-        self.analisar_padrao_temporal()
-        self.analisar_late_odds()
-        self.analisar_taxa_acerto()
-        
-        # Calcular perfil de risco
-        pontuacao_risco = 0
-        niveis = {'BAIXA': 1, 'MÉDIA': 2, 'ALTA': 3, 'CRÍTICA': 4}
-        
-        for padrao in self.padroes_detectados:
-            pontuacao_risco += niveis.get(padrao['severidade'], 1)
-        
-        # Classificar perfil
-        if pontuacao_risco > 15:
-            perfil = "🚨 CRÍTICO - ARBITRAGEM PROFISSIONAL"
-        elif pontuacao_risco > 10:
-            perfil = "⚠️ SUSPEITO - PADRÕES PROFISSIONAIS"
-        elif pontuacao_risco > 5:
-            perfil = "🔍 ATENÇÃO - APOSTADOR FREQUENTE"
+            eventos_repetidos = ultima_hora.groupby('Bet events').size()
+            metricas['eventos_com_multiplas_apostas'] = len(eventos_repetidos[eventos_repetidos > 1])
         else:
-            perfil = "✅ RECREATIVO - SEM PADRÕES SUSPEITOS"
+            metricas['eventos_com_multiplas_apostas'] = 0
+    
+    # 6. Taxa de acerto
+    if 'Bet status' in df.columns:
+        metricas['apostas_ganhas'] = len(df[df['Bet status'] == 'Ganha'])
+        metricas['apostas_perdidas'] = len(df[df['Bet status'] == 'Perdida'])
+        metricas['taxa_acerto'] = (metricas['apostas_ganhas'] / len(df)) * 100 if len(df) > 0 else 0
+    
+    return metricas
+
+# 5. Função para validar odds com API
+def validar_odds_com_api(df, odds_api_key):
+    """Valida odds usando The Odds API"""
+    
+    mapping = {
+        'Premier League': 'soccer_epl',
+        'La Liga': 'soccer_spain_la_liga',
+        'Brasileirão': 'soccer_brazil_campeonato',
+        'Serie A': 'soccer_italy_serie_a',
+        'Bundesliga': 'soccer_germany_bundesliga',
+        'Champions League': 'soccer_uefa_champs_league',
+        'Liga Europa': 'soccer_uefa_europa_league'
+    }
+    
+    odds_inconsistentes = []
+    
+    # Limitar para não gastar muitos créditos
+    df_amostra = df.head(20)
+    
+    with st.spinner("🔍 Validando odds com The Odds API..."):
+        progress_bar = st.progress(0)
         
-        return {
-            'perfil': perfil,
-            'pontuacao': pontuacao_risco,
-            'padroes': self.padroes_detectados,
-            'total_apostas': len(self.df)
-        }
+        for idx, aposta in df_amostra.iterrows():
+            progress_bar.progress((idx + 1) / len(df_amostra))
+            
+            liga = aposta.get('Bet champs', '')
+            sport_key = mapping.get(liga)
+            
+            if sport_key:
+                try:
+                    url = f"{ODDS_BASE_URL}/sports/{sport_key}/odds"
+                    params = {
+                        "apiKey": odds_api_key,
+                        "regions": "eu,uk,br",
+                        "markets": "h2h",
+                        "oddsFormat": "decimal"
+                    }
+                    
+                    response = requests.get(url, params=params, timeout=5)
+                    
+                    if response.status_code == 200:
+                        eventos = response.json()
+                        odds_apostada = float(aposta['Bet prices'])
+                        nome_evento = aposta['Bet events']
+                        
+                        # Procurar evento correspondente
+                        for evento in eventos:
+                            evento_nome = f"{evento['home_team']} vs {evento['away_team']}"
+                            if any(time.lower() in nome_evento.lower() for time in [evento['home_team'], evento['away_team']]):
+                                
+                                # Coletar odds do mercado
+                                odds_list = []
+                                for bookmaker in evento.get('bookmakers', []):
+                                    for market in bookmaker.get('markets', []):
+                                        for outcome in market.get('outcomes', []):
+                                            odds_list.append(outcome['price'])
+                                
+                                if odds_list:
+                                    odds_media = sum(odds_list) / len(odds_list)
+                                    desvio = ((odds_apostada - odds_media) / odds_media) * 100
+                                    
+                                    if abs(desvio) > 15:  # Desvio significativo
+                                        odds_inconsistentes.append({
+                                            'Bet ID': aposta['Bet id'],
+                                            'Evento': nome_evento,
+                                            'Odds Apostada': odds_apostada,
+                                            'Odds Média': round(odds_media, 2),
+                                            'Desvio %': round(desvio, 1),
+                                            'Classificação': '🚨 MUITO ACIMA' if desvio > 15 else '⚠️ MUITO ABAIXO'
+                                        })
+                                break
+                    
+                    time.sleep(0.2)  # Delay para não sobrecarregar
+                    
+                except Exception as e:
+                    continue
+        
+        progress_bar.empty()
+    
+    return odds_inconsistentes
 
-# 4. INTERFACE PRINCIPAL
-col1, col2 = st.columns([2, 1])
-
-with col1:
-    uploaded_file = st.file_uploader("📤 Suba a betlist do jogador (CSV/Excel)", type=['csv', 'xlsx'])
-
-with col2:
-    st.info("""
-    **O que será analisado:**
-    - 💰 Valores fixos (R$495,00)
-    - 🌏 Ligas suspeitas
-    - 🎲 Odds quebradas
-    - ⏰ Padrões temporais
-    - ⚡ Late odds
-    - 📊 Taxa de acerto
-    """)
+# 6. Interface de Upload (igual ao antigo)
+uploaded_file = st.file_uploader("Suba sua planilha de apostas Altenar (CSV ou Excel)", type=['csv', 'xlsx'])
 
 if uploaded_file is not None:
     try:
-        # Carregar dados - VERSÃO CORRIGIDA para seu formato
+        # Carregamento inteligente dos dados (adaptado para seu formato)
         if uploaded_file.name.endswith('.csv'):
-            # Ler o arquivo como texto primeiro
-            content = uploaded_file.read().decode('utf-8')
-            
-            # Processar linhas
-            lines = content.strip().split('\n')
-            
-            # Extrair cabeçalho (primeira linha)
-            header_line = lines[0].strip()
-            if header_line.startswith('"') and header_line.endswith('"'):
-                header_line = header_line.strip('"')
-            header = header_line.split(',')
-            
-            # Processar dados
-            data = []
-            for line in lines[1:]:
-                if line.strip():
-                    # Limpar a linha
-                    clean_line = line.strip()
-                    if clean_line.startswith('"') and clean_line.endswith('"'):
-                        clean_line = clean_line.strip('"')
-                    values = clean_line.split(',')
-                    data.append(values)
-            
-            # Criar DataFrame
-            df = pd.DataFrame(data, columns=header)
-            
-            # Converter colunas numéricas
-            for col in ['Bet prices', 'Total stake', 'Real win']:
-                if col in df.columns:
-                    df[col] = pd.to_numeric(df[col], errors='coerce')
-            
-            st.success(f"✅ Betlist carregada! {len(df)} apostas")
-            
-            with st.expander("👁️ Visualizar dados brutos"):
-                st.dataframe(df.head(20))
-            
-            # Identificar jogador
-            if 'Player name' in df.columns:
-                jogador = df['Player name'].iloc[0] if len(df) > 0 else "Desconhecido"
-                st.markdown(f"## 📊 Análise do Jogador: **{jogador}**")
-                st.markdown(f"Total de apostas no período: **{len(df)}**")
-                
-                # Inicializar analisador
-                analisador = AnalisadorComportamental(df)
-                
-                # Botão para iniciar análise
-                if st.button("🚀 INICIAR ANÁLISE COMPLETA", type="primary", use_container_width=True):
-                    with st.spinner("Analisando padrões comportamentais..."):
-                        
-                        # Gerar relatório
-                        relatorio = analisador.gerar_relatorio_completo()
-                        
-                        # MOSTRAR RESULTADOS
-                        st.markdown("---")
-                        
-                        # Perfil de risco
-                        col_a, col_b, col_c = st.columns(3)
-                        with col_a:
-                            st.metric("Perfil de Risco", relatorio['perfil'])
-                        with col_b:
-                            st.metric("Pontuação", relatorio['pontuacao'])
-                        with col_c:
-                            st.metric("Apostas Analisadas", relatorio['total_apostas'])
-                        
-                        st.markdown("---")
-                        
-                        # Padrões detectados
-                        if relatorio['padroes']:
-                            st.markdown("## 🔍 PADRÕES DETECTADOS")
-                            
-                            # Separar por severidade
-                            criticos = [p for p in relatorio['padroes'] if p['severidade'] == 'CRÍTICA']
-                            altos = [p for p in relatorio['padroes'] if p['severidade'] == 'ALTA']
-                            medios = [p for p in relatorio['padroes'] if p['severidade'] == 'MÉDIA']
-                            baixos = [p for p in relatorio['padroes'] if p['severidade'] == 'BAIXA']
-                            
-                            # Mostrar críticos primeiro
-                            if criticos:
-                                st.markdown("### 🚨 PADRÕES CRÍTICOS")
-                                for p in criticos:
-                                    with st.expander(f"**{p['padrao']}**", expanded=True):
-                                        st.error(p['descricao'])
-                                        if p['dados'] is not None:
-                                            st.dataframe(p['dados'])
-                            
-                            if altos:
-                                st.markdown("### ⚠️ PADRÕES DE ALTA SEVERIDADE")
-                                for p in altos:
-                                    with st.expander(f"**{p['padrao']}**"):
-                                        st.warning(p['descricao'])
-                                        if p['dados'] is not None:
-                                            st.dataframe(p['dados'])
-                            
-                            if medios:
-                                st.markdown("### 🔍 PADRÕES DE MÉDIA SEVERIDADE")
-                                for p in medios:
-                                    with st.expander(f"**{p['padrao']}**"):
-                                        st.info(p['descricao'])
-                                        if p['dados'] is not None:
-                                            st.dataframe(p['dados'])
-                            
-                            if baixos:
-                                st.markdown("### 📌 PADRÕES DE BAIXA SEVERIDADE")
-                                for p in baixos:
-                                    with st.expander(f"**{p['padrao']}**"):
-                                        st.write(p['descricao'])
-                                        if p['dados'] is not None:
-                                            st.dataframe(p['dados'])
-                        else:
-                            st.success("✅ Nenhum padrão suspeito detectado!")
-                        
-                        # Resumo com IA
-                        st.markdown("---")
-                        st.markdown("### 📋 RESUMO EXECUTIVO")
-                        
-                        prompt_resumo = f"""
-                        Jogador: {jogador}
-                        Total de apostas: {relatorio['total_apostas']}
-                        Perfil de risco: {relatorio['perfil']}
-                        
-                        Padrões detectados:
-                        {chr(10).join([f"- {p['padrao']} ({p['severidade']}): {p['descricao']}" for p in relatorio['padroes']])}
-                        
-                        Gere um resumo executivo em português com:
-                        1. Perfil do jogador (recreativo, profissional ou arbitrador)
-                        2. Principais riscos identificados
-                        3. Recomendações de ação
-                        """
-                        
-                        try:
-                            response = model.generate_content(prompt_resumo)
-                            st.info(response.text)
-                        except Exception as e:
-                            st.write("Resumo gerado pela análise local")
-                        
-                        # Botão para download
-                        relatorio_texto = f"""
-RELATÓRIO DEEPRISK - ANÁLISE COMPORTAMENTAL
-=============================================
-Jogador: {jogador}
-Data: {datetime.now().strftime('%d/%m/%Y %H:%M')}
-Total de Apostas: {relatorio['total_apostas']}
-Perfil: {relatorio['perfil']}
-Pontuação de Risco: {relatorio['pontuacao']}
-
-PADRÕES DETECTADOS:
-{chr(10).join([f"- {p['padrao']} ({p['severidade']}): {p['descricao']}" for p in relatorio['padroes']])}
-
-RECOMENDAÇÕES:
-1. {"🚨 Monitoramento intensivo necessário" if relatorio['pontuacao'] > 10 else "✅ Acompanhamento padrão"}
-2. {"🌏 Revisar apostas em ligas asiáticas" if any('LIGAS' in p['padrao'] for p in relatorio['padroes']) else ""}
-3. {"⚡ Verificar padrão de late odds" if any('LATE' in p['padrao'] for p in relatorio['padroes']) else ""}
-4. {"💰 Investigar valores fixos" if any('VALOR FIXO' in p['padrao'] for p in relatorio['padroes']) else ""}
-"""
-                        st.download_button(
-                            label="📥 Baixar Relatório Completo",
-                            data=relatorio_texto,
-                            file_name=f"deeprisk_{jogador}_{datetime.now().strftime('%Y%m%d')}.txt"
-                        )
-            else:
-                st.error("❌ Coluna 'Player name' não encontrada na planilha!")
-                st.write("Colunas encontradas:", list(df.columns))
-                
-        else:  # Excel
+            df = processar_csv_com_aspas(uploaded_file)
+        else:
             df = pd.read_excel(uploaded_file)
-            st.success(f"✅ Betlist carregada! {len(df)} apostas")
-            
+        
+        st.success(f"✅ Arquivo carregado com sucesso! {len(df)} linhas identificadas.")
+        
+        # Identificar jogador
+        if 'Player name' in df.columns:
+            jogador = df['Player name'].iloc[0]
+            st.subheader(f"📊 Analisando jogador: **{jogador}**")
+        
+        with st.expander("👁️ Clique para conferir os dados brutos"):
+            st.dataframe(df.head(20))
+        
+        # Opções de análise
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            validar_com_api = st.checkbox("🔍 Validar odds com The Odds API (recomendado)", value=True)
+        with col2:
+            st.info(f"🎯 {len(df)} apostas no período")
+        
+        # 7. Botão de Auditoria (igual ao antigo)
+        if st.button("🚀 Iniciar Auditoria IA", type="primary", use_container_width=True):
+            with st.spinner("O DeepRisk está processando os padrões de risco..."):
+                
+                # Calcular métricas comportamentais
+                metricas = calcular_metricas_comportamentais(df)
+                
+                # Validar odds com API se solicitado
+                odds_inconsistentes = []
+                if validar_com_api:
+                    odds_inconsistentes = validar_odds_com_api(df, ODDS_API_KEY)
+                
+                # Preparar dados para a IA
+                dados_audit = df.head(50).to_string()
+                
+                # Construir prompt com todas as métricas
+                prompt = f"""
+Você é um especialista sênior em integridade de apostas esportivas da Altenar.
+
+ANÁLISE COMPORTAMENTAL DO JOGADOR:
+===================================
+Total de apostas: {metricas.get('total_apostas', 0)}
+Período analisado: {df['Created date'].min().strftime('%d/%m/%Y') if 'Created date' in df.columns else 'N/A'} a {df['Created date'].max().strftime('%d/%m/%Y') if 'Created date' in df.columns else 'N/A'}
+
+📊 **MÉTRICAS DE APOSTAS:**
+- Valor médio: R$ {metricas.get('valor_medio', 0):.2f}
+- Valor mínimo: R$ {metricas.get('valor_min', 0):.2f}
+- Valor máximo: R$ {metricas.get('valor_max', 0):.2f}
+- Apostas de R$ 495,00: {metricas.get('apostas_495', 0)} ({metricas.get('percentual_495', 0):.1f}% do total)
+
+🌏 **ANÁLISE DE LIGAS:**
+- Apostas em ligas suspeitas: {metricas.get('apostas_ligas_suspeitas', 0)}
+- Ligas diferentes: {metricas.get('ligas_unicas', 0)}
+- Top 3 ligas: {metricas.get('top_ligas', {})}
+
+🎲 **ANÁLISE DE ODDS:**
+- Odds quebradas (arbitragem): {metricas.get('apostas_odds_quebradas', 0)}
+- Odds média: {metricas.get('odds_media', 0):.2f}
+- Odds mínima: {metricas.get('odds_min', 0):.2f}
+- Odds máxima: {metricas.get('odds_max', 0):.2f}
+
+⏰ **ANÁLISE TEMPORAL:**
+- Apostas na madrugada (0h-5h): {metricas.get('apostas_madrugada', 0)}
+- Apostas em lote (mesmo minuto): {metricas.get('apostas_em_lote', 0)}
+- Eventos com múltiplas apostas: {metricas.get('eventos_com_multiplas_apostas', 0)}
+
+⚡ **LATE ODDS:**
+- Apostas na última hora: {metricas.get('apostas_ultima_hora', 0)}
+
+📈 **TAXA DE ACERTO:**
+- Apostas ganhas: {metricas.get('apostas_ganhas', 0)}
+- Apostas perdidas: {metricas.get('apostas_perdidas', 0)}
+- Taxa de acerto: {metricas.get('taxa_acerto', 0):.1f}%
+
+"""
+
+                # Adicionar seção de odds inconsistentes se houver
+                if odds_inconsistentes:
+                    prompt += f"""
+🚨 **ODDS INCONSISTENTES DETECTADAS (VALIDAÇÃO COM THE ODDS API):**
+Total de odds inconsistentes: {len(odds_inconsistentes)}
+
+Detalhes:
+{chr(10).join([f"- Aposta {o['Bet ID']}: {o['Evento']} | Odds: {o['Odds Apostada']} vs Média: {o['Odds Média']} | Desvio: {o['Desvio %']}% {o['Classificação']}" for o in odds_inconsistentes])}
+
+"""
+
+                prompt += """
+ANÁLISE COMPORTAMENTAL DETALHADA:
+================================
+Com base nas métricas acima, analise:
+
+1. **PADRÕES DE VALOR**: Existe concentração em valores específicos? O valor de R$495,00 aparece com frequência?
+2. **PADRÕES DE LIGAS**: Há concentração em ligas de baixa liquidez? Quais?
+3. **PADRÕES DE ODDS**: As odds são quebradas (padrão de arbitragem)?
+4. **PADRÕES TEMPORAIS**: O jogador aposta em horários atípicos? Faz apostas em lote?
+5. **LATE ODDS**: Aposta muito próximo ao início dos eventos?
+6. **TAXA DE ACERTO**: Está dentro do normal (45-55%) ou muito acima?
+
+"""
+
+                if odds_inconsistentes:
+                    prompt += """
+7. **ODDS ERRADAS**: As odds inconsistentes detectadas indicam exploração de latência/erros do sistema?
+
+"""
+
+                prompt += """
+Com base em TODOS os padrões identificados, forneça:
+
+📋 **RELATÓRIO EXECUTIVO:**
+- Perfil do jogador (RECREATIVO, PROFISSIONAL, ARBITRADOR ou CRÍTICO)
+- Principais padrões de risco identificados
+- Evidências concretas dos padrões
+
+⚠️ **NÍVEL DE RISCO:**
+[BAIXO | MÉDIO | ALTO | CRÍTICO]
+
+🎯 **RECOMENDAÇÕES DE AÇÃO:**
+- O que fazer com este jogador?
+- Precisa de monitoramento?
+- Deve ser bloqueado?
+
+Responda em Português, seja detalhado e profissional.
+"""
+
+                # Chamada à IA (igual ao antigo)
+                response = model.generate_content(prompt)
+                
+                # Mostrar relatório (igual ao antigo)
+                st.markdown("### 📊 Relatório de Risco Gerado")
+                st.info(response.text)
+                
+                # Mostrar odds inconsistentes em destaque se houver
+                if odds_inconsistentes:
+                    with st.expander("🚨 Detalhes das odds inconsistentes encontradas", expanded=True):
+                        st.warning(f"**{len(odds_inconsistentes)} odds inconsistentes detectadas!**")
+                        df_odds = pd.DataFrame(odds_inconsistentes)
+                        st.dataframe(df_odds, use_container_width=True)
+                
+                # Botão de download (igual ao antigo)
+                relatorio_completo = f"""
+RELATÓRIO DEEPRISK - ANÁLISE COMPLETA
+======================================
+Data: {datetime.now().strftime('%d/%m/%Y %H:%M')}
+Jogador: {jogador if 'jogador' in locals() else 'N/A'}
+Total de apostas: {len(df)}
+
+{response.text}
+
+MÉTRICAS COMPUTACIONAIS:
+{chr(10).join([f"{k}: {v}" for k, v in metricas.items()])}
+
+ODDS INCONSISTENTES: {len(odds_inconsistentes)}
+"""
+                
+                st.download_button(
+                    label="📄 Baixar Relatório Completo",
+                    data=relatorio_completo,
+                    file_name=f"deeprisk_{datetime.now().strftime('%Y%m%d_%H%M')}.txt",
+                    mime="text/plain"
+                )
+                
     except Exception as e:
-        st.error(f"Erro ao processar arquivo: {e}")
+        st.error(f"Erro ao ler o arquivo: {e}")
         st.exception(e)
+else:
+    st.info("Aguardando upload para iniciar auditoria.")
 
 st.markdown("---")
-st.caption("DeepRisk v3.0 - Analisador Comportamental Completo")
+st.caption("DeepRisk v3.5 - Python 3.11 | Com validação The Odds API")
