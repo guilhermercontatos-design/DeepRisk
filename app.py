@@ -2,261 +2,46 @@ import streamlit as st
 import pandas as pd
 import google.generativeai as genai
 from datetime import datetime
-import time
-import csv
-from io import StringIO
-import chardet
-import re
 import requests
-import numpy as np
-from scipy import stats
+import time
 
 # ============================================
-# FUNÇÃO 1: LEITOR UNIVERSAL DE PLANILHAS
+# FUNÇÃO PARA PROCESSAR CSV
 # ============================================
-def processar_planilha_universal(arquivo):
-    """LEITOR UNIVERSAL - Aceita qualquer formato de planilha"""
+def processar_csv(arquivo):
+    """Processa CSV com formato da Altenar"""
+    content = arquivo.read().decode('utf-8')
+    lines = content.strip().split('\n')
     
-    nome_arquivo = arquivo.name.lower()
+    # Processar cabeçalho
+    header_line = lines[0].strip()
+    if header_line.startswith('"') and header_line.endswith('"'):
+        header_line = header_line.strip('"')
+    header = header_line.split(',')
     
-    # Se for Excel
-    if nome_arquivo.endswith('.xlsx') or nome_arquivo.endswith('.xls'):
-        try:
-            df = pd.read_excel(arquivo)
-            st.success(f"✅ Excel lido com sucesso! {len(df)} linhas")
-            return df
-        except Exception as e:
-            st.error(f"Erro ao ler Excel: {e}")
-            return None
+    # Processar dados
+    data = []
+    for line in lines[1:]:
+        if line.strip():
+            clean_line = line.strip()
+            if clean_line.startswith('"') and clean_line.endswith('"'):
+                clean_line = clean_line.strip('"')
+            values = clean_line.split(',')
+            data.append(values)
     
-    # Se for CSV
-    else:
-        # Detectar encoding
-        conteudo_bruto = arquivo.read()
-        try:
-            encoding = chardet.detect(conteudo_bruto)['encoding'] or 'utf-8'
-            conteudo = conteudo_bruto.decode(encoding)
-        except:
-            conteudo = conteudo_bruto.decode('latin1')
-        
-        # Detectar separador
-        primeira_linha = conteudo.split('\n')[0] if conteudo else ''
-        separadores = [',', ';', '\t', '|']
-        separador = ','
-        maior = 0
-        for sep in separadores:
-            if primeira_linha.count(sep) > maior:
-                maior = primeira_linha.count(sep)
-                separador = sep
-        
-        # Tentar ler com pandas
-        try:
-            from io import StringIO
-            df = pd.read_csv(StringIO(conteudo), sep=separador, engine='python', 
-                           skipinitialspace=True, on_bad_lines='skip')
-            st.success(f"✅ CSV lido com sucesso! {len(df)} linhas")
-            return df
-        except:
-            # Leitura manual como fallback
-            linhas = [l.strip() for l in conteudo.split('\n') if l.strip()]
-            if not linhas:
-                return None
-            
-            cabecalho = [h.strip().strip('"') for h in linhas[0].split(separador)]
-            dados = []
-            for linha in linhas[1:]:
-                valores = [v.strip().strip('"') for v in linha.split(separador)]
-                if len(valores) == len(cabecalho):
-                    dados.append(valores)
-            
-            if dados:
-                return pd.DataFrame(dados, columns=cabecalho)
-            return None
-
-# ============================================
-# FUNÇÃO 2: NORMALIZADOR DE COLUNAS
-# ============================================
-def normalizar_colunas(df):
-    """Normaliza os nomes das colunas para o padrão DeepRisk"""
+    df = pd.DataFrame(data, columns=header)
     
-    # Mapeamento de nomes possíveis para o padrão
-    mapping = {
-        'player': 'Player name',
-        'player name': 'Player name',
-        'nome': 'Player name',
-        'jogador': 'Player name',
-        
-        'bet id': 'Bet id',
-        'id': 'Bet id',
-        'aposta id': 'Bet id',
-        
-        'created date': 'Created date',
-        'data': 'Created date',
-        'data aposta': 'Created date',
-        
-        'bet event date': 'Bet event date',
-        'event date': 'Bet event date',
-        'data evento': 'Bet event date',
-        
-        'bet sports': 'Bet sports',
-        'sports': 'Bet sports',
-        'esporte': 'Bet sports',
-        
-        'bet champs': 'Bet champs',
-        'champs': 'Bet champs',
-        'liga': 'Bet champs',
-        'campeonato': 'Bet champs',
-        
-        'bet events': 'Bet events',
-        'events': 'Bet events',
-        'evento': 'Bet events',
-        'jogo': 'Bet events',
-        
-        'bet markets': 'Bet markets',
-        'markets': 'Bet markets',
-        'mercado': 'Bet markets',
-        
-        'bet prices': 'Bet prices',
-        'prices': 'Bet prices',
-        'odds': 'Bet prices',
-        'cota': 'Bet prices',
-        
-        'total stake': 'Total stake',
-        'stake': 'Total stake',
-        'valor': 'Total stake',
-        'aposta': 'Total stake',
-        
-        'bet status': 'Bet status',
-        'status': 'Bet status',
-        'resultado': 'Bet status'
-    }
+    # Converter colunas numéricas
+    for col in ['Bet prices', 'Total stake', 'Real win']:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
     
-    # Colunas que queremos no final
-    colunas_esperadas = [
-        'Player name', 'Bet id', 'Created date', 'Bet event date',
-        'Bet sports', 'Bet champs', 'Bet events', 'Bet markets', 
-        'Bet prices', 'Total stake', 'Bet status'
-    ]
+    # Converter datas
+    for col in ['Created date', 'Bet event date', 'Settlement date']:
+        if col in df.columns:
+            df[col] = pd.to_datetime(df[col], errors='coerce')
     
-    # Criar novo DataFrame com colunas normalizadas
-    novo_df = pd.DataFrame()
-    
-    for col_esperada in colunas_esperadas:
-        encontrada = False
-        
-        # Procurar correspondência exata
-        if col_esperada in df.columns:
-            novo_df[col_esperada] = df[col_esperada]
-            encontrada = True
-        else:
-            # Procurar correspondência aproximada
-            for col_original in df.columns:
-                col_clean = re.sub(r'[^a-zA-Z]', '', col_original.lower())
-                for chave, valor in mapping.items():
-                    chave_clean = re.sub(r'[^a-zA-Z]', '', chave.lower())
-                    if chave_clean in col_clean or col_clean in chave_clean:
-                        novo_df[col_esperada] = df[col_original]
-                        encontrada = True
-                        break
-                if encontrada:
-                    break
-        
-        # Se não encontrou, criar coluna vazia
-        if not encontrada:
-            novo_df[col_esperada] = None
-    
-    return novo_df
-
-# ============================================
-# FUNÇÃO 3: ANALISADOR SIMPLES (sem precisar dos arquivos core)
-# ============================================
-def analisar_padroes_simples(df):
-    """Análise básica de padrões sem precisar dos arquivos core"""
-    
-    alertas = []
-    pontuacao = 0
-    
-    # 1. Analisar valores de aposta
-    if 'Total stake' in df.columns:
-        valores = pd.to_numeric(df['Total stake'], errors='coerce')
-        
-        # Verificar R$ 495
-        count_495 = len(valores[valores == 495.00])
-        if count_495 > 0:
-            percentual = (count_495 / len(df)) * 100
-            alertas.append({
-                'severidade': 'ALTA' if percentual > 50 else 'MÉDIA',
-                'titulo': '💰 Valores de R$ 495,00',
-                'descricao': f'{count_495} apostas ({percentual:.1f}%) com valor R$ 495,00'
-            })
-            pontuacao += 3 if percentual > 50 else 2
-    
-    # 2. Analisar ligas
-    if 'Bet champs' in df.columns:
-        ligas_suspeitas = ['Vietnam', 'Indonésia', 'Mianmar', 'Camboja', 'Laos']
-        count_ligas = 0
-        for liga in ligas_suspeitas:
-            count_ligas += len(df[df['Bet champs'].str.contains(liga, case=False, na=False)])
-        
-        if count_ligas > 0:
-            percentual = (count_ligas / len(df)) * 100
-            alertas.append({
-                'severidade': 'ALTA' if percentual > 30 else 'MÉDIA',
-                'titulo': '🌏 Ligas de Baixa Liquidez',
-                'descricao': f'{count_ligas} apostas ({percentual:.1f}%) em ligas suspeitas'
-            })
-            pontuacao += 3 if percentual > 30 else 2
-    
-    # 3. Analisar odds quebradas
-    if 'Bet prices' in df.columns:
-        odds = pd.to_numeric(df['Bet prices'], errors='coerce')
-        quebradas = odds.apply(lambda x: len(str(x).split('.')[-1]) > 2 if '.' in str(x) else False)
-        count_quebradas = quebradas.sum()
-        
-        if count_quebradas > 0:
-            percentual = (count_quebradas / len(df)) * 100
-            alertas.append({
-                'severidade': 'MÉDIA' if percentual > 30 else 'BAIXA',
-                'titulo': '🎲 Odds Quebradas',
-                'descricao': f'{count_quebradas} apostas ({percentual:.1f}%) com odds quebradas'
-            })
-            pontuacao += 2 if percentual > 30 else 1
-    
-    # 4. Analisar taxa de acerto
-    if 'Bet status' in df.columns:
-        ganhas = len(df[df['Bet status'].str.contains('Ganha', case=False, na=False)])
-        taxa = (ganhas / len(df)) * 100 if len(df) > 0 else 0
-        
-        if taxa > 65:
-            alertas.append({
-                'severidade': 'CRÍTICA',
-                'titulo': '📊 Taxa de Acerto Anormal',
-                'descricao': f'Taxa de acerto de {taxa:.1f}% ({ganhas} ganhas em {len(df)})'
-            })
-            pontuacao += 5
-        elif taxa > 55:
-            alertas.append({
-                'severidade': 'MÉDIA',
-                'titulo': '📊 Taxa de Acerto Elevada',
-                'descricao': f'Taxa de acerto de {taxa:.1f}%'
-            })
-            pontuacao += 2
-    
-    # Classificar perfil
-    if pontuacao > 10:
-        perfil = "🚨 CRÍTICO - ARBITRAGEM PROFISSIONAL"
-    elif pontuacao > 5:
-        perfil = "⚠️ ALTO - PROFISSIONAL"
-    elif pontuacao > 2:
-        perfil = "🔍 MÉDIO - ATENÇÃO"
-    else:
-        perfil = "✅ RECREATIVO - BAIXO RISCO"
-    
-    return {
-        'perfil': perfil,
-        'pontuacao': pontuacao,
-        'alertas': alertas
-    }
+    return df
 
 # ============================================
 # CONFIGURAÇÃO DA PÁGINA
@@ -267,98 +52,144 @@ st.set_page_config(
     layout="wide"
 )
 
-# Título
-st.markdown("""
-<h1 style="color: #1A2B3C; font-size: 36px; font-weight: 600; text-align: center;">
-    🛡️ DeepRisk
-</h1>
-<p style="color: #5D6D7E; font-size: 16px; text-align: center; margin-bottom: 30px;">
-    Auditoria de Integridade em Apostas Esportivas
-</p>
-""", unsafe_allow_html=True)
+st.title("🛡️ DeepRisk: Auditoria de Risco Avançada")
+st.markdown("---")
 
 # ============================================
-# UPLOAD DO ARQUIVO
+# CONFIGURAÇÃO DAS APIS
+# ============================================
+if "GEMINI_API_KEY" not in st.secrets:
+    st.error("ERRO: Configure sua GEMINI_API_KEY nos Secrets.")
+    st.stop()
+
+try:
+    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+    
+    # Lista de modelos para tentar
+    modelos_para_tentar = [
+        'models/gemini-2.5-flash-lite',
+        'models/gemini-2.5-flash',
+        'models/gemini-2.0-flash',
+    ]
+    
+    model = None
+    modelo_escolhido = None
+    
+    for modelo_nome in modelos_para_tentar:
+        try:
+            model_test = genai.GenerativeModel(modelo_nome)
+            test_response = model_test.generate_content(
+                "teste",
+                generation_config={"max_output_tokens": 1}
+            )
+            model = model_test
+            modelo_escolhido = modelo_nome
+            st.success(f"✅ Conectado: {modelo_nome}")
+            break
+        except Exception as e:
+            if "429" in str(e):
+                st.warning(f"⚠️ {modelo_nome} sem cota")
+            continue
+    
+    if model is None:
+        st.error("❌ NENHUM MODELO DISPONÍVEL NO MOMENTO")
+        st.stop()
+    
+    ODDS_API_KEY = "3dd5323db5132e0a04840136ac9f0556"
+    
+    # Sidebar com informações
+    with st.sidebar:
+        st.image("https://via.placeholder.com/300x100/1E1E2E/9D9DFF?text=DeepRisk", use_column_width=True)
+        st.markdown("### ⚙️ Configurações")
+        validar_api = st.checkbox("🔍 Validar com The Odds API", value=True)
+        st.markdown("---")
+        st.markdown(f"**Modelo ativo:** {modelo_escolhido}")
+        st.markdown("**Status:** 🟢 Online")
+    
+except Exception as e:
+    st.error(f"Erro: {e}")
+    st.stop()
+
+# ============================================
+# INTERFACE PRINCIPAL
 # ============================================
 uploaded_file = st.file_uploader(
-    "📤 Selecione a planilha de apostas",
-    type=['csv', 'xlsx', 'xls']
+    "Suba sua planilha de apostas Altenar (CSV ou Excel)",
+    type=['csv', 'xlsx']
 )
 
 if uploaded_file is not None:
     try:
-        # Ler a planilha
-        df = processar_planilha_universal(uploaded_file)
+        # Carregar dados
+        if uploaded_file.name.endswith('.csv'):
+            df = processar_csv(uploaded_file)
+        else:
+            df = pd.read_excel(uploaded_file)
         
-        if df is None or df.empty:
-            st.error("Não foi possível ler o arquivo")
-            st.stop()
+        st.success(f"✅ Arquivo carregado! {len(df)} linhas identificadas.")
         
-        # Normalizar colunas
-        df = normalizar_colunas(df)
+        # Identificar jogador
+        if 'Player name' in df.columns:
+            jogador = df['Player name'].iloc[0]
+            st.subheader(f"📊 Analisando jogador: **{jogador}**")
         
-        st.success(f"✅ Arquivo processado! {len(df)} apostas encontradas")
-        
-        # Mostrar preview
-        with st.expander("👁️ Ver dados"):
+        with st.expander("👁️ Visualizar dados brutos"):
             st.dataframe(df.head(10))
         
-        # Informações básicas
+        # Métricas básicas
         col1, col2, col3 = st.columns(3)
         with col1:
             st.metric("Total Apostas", len(df))
         with col2:
             if 'Total stake' in df.columns:
-                st.metric("Total Apostado", f"R$ {pd.to_numeric(df['Total stake'], errors='coerce').sum():,.2f}")
+                st.metric("Total Apostado", f"R$ {df['Total stake'].sum():,.2f}")
         with col3:
             if 'Bet status' in df.columns:
-                ganhas = len(df[df['Bet status'].str.contains('Ganha', case=False, na=False)])
+                ganhas = len(df[df['Bet status'] == 'Ganha'])
                 st.metric("Taxa Acerto", f"{(ganhas/len(df)*100):.1f}%")
         
         # Botão de análise
-        if st.button("🔍 INICIAR ANÁLISE", use_container_width=True):
-            
-            with st.spinner("Analisando padrões..."):
+        if st.button("🚀 INICIAR AUDITORIA IA", type="primary", use_container_width=True):
+            with st.spinner("O DeepRisk está processando os padrões de risco..."):
                 
-                # Analisar
-                resultado = analisar_padroes_simples(df)
+                # Preparar dados para IA
+                dados_audit = df.head(50).to_string()
                 
-                # Mostrar resultado
-                st.markdown("---")
-                st.markdown("## 📊 RESULTADO DA ANÁLISE")
-                
-                # Perfil
-                if "CRÍTICO" in resultado['perfil']:
-                    st.error(f"### {resultado['perfil']}")
-                elif "ALTO" in resultado['perfil']:
-                    st.warning(f"### {resultado['perfil']}")
-                elif "MÉDIO" in resultado['perfil']:
-                    st.info(f"### {resultado['perfil']}")
-                else:
-                    st.success(f"### {resultado['perfil']}")
-                
-                # Alertas
-                if resultado['alertas']:
-                    st.markdown("### 🚨 Alertas Detectados")
-                    for alerta in resultado['alertas']:
-                        if alerta['severidade'] == 'CRÍTICA':
-                            st.error(f"**{alerta['titulo']}** - {alerta['descricao']}")
-                        elif alerta['severidade'] == 'ALTA':
-                            st.warning(f"**{alerta['titulo']}** - {alerta['descricao']}")
-                        else:
-                            st.info(f"**{alerta['titulo']}** - {alerta['descricao']}")
-                else:
-                    st.success("✅ Nenhum padrão suspeito detectado")
-                
-                # Pontuação
-                st.metric("Pontuação de Risco", resultado['pontuacao'])
-                
-                st.balloons()
-        
-    except Exception as e:
-        st.error(f"Erro: {e}")
-        st.exception(e)
+                prompt = f"""
+Você é um especialista em integridade de apostas esportivas da Altenar.
+Analise os dados abaixo e identifique comportamentos profissionais ou fraudulentos:
 
+{dados_audit}
+
+Busque por:
+1. Apostas repetidas de 495,00 (Tentativa de burlar limites).
+2. Concentração anormal em ligas de baixa liquidez (Vietnã, Indonésia).
+3. Uso de centavos quebrados (Surebet/Arbitragem).
+4. Apostas de última hora (late odds).
+5. Taxa de acerto anormal (>60%).
+
+Dê um veredito final (Recreativo, Profissional ou Suspeito de Fraude).
+Responda em Português, seja detalhado.
+"""
+                
+                # Chamar IA
+                response = model.generate_content(prompt)
+                
+                st.markdown("### 📊 Relatório de Risco Gerado")
+                st.info(response.text)
+                
+                # Botão de download
+                st.download_button(
+                    label="📄 Baixar Relatório",
+                    data=response.text,
+                    file_name=f"deeprisk_{datetime.now().strftime('%Y%m%d_%H%M')}.txt"
+                )
+                
+    except Exception as e:
+        st.error(f"Erro ao ler o arquivo: {e}")
+        st.exception(e)
 else:
-    # Estado inicial
-    st.info("📤 Aguardando upload da planilha")
+    st.info("Aguardando upload para iniciar auditoria.")
+
+st.markdown("---")
+st.caption(f"DeepRisk v3.0 - Modelo: {modelo_escolhido if 'modelo_escolhido' in locals() else 'N/A'}")
