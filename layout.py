@@ -1,352 +1,177 @@
-# layout.py - TODOS OS ESTILOS E COMPONENTES VISUAIS
+# diagnostico.py - Diagnóstico completo da API Gemini
 import streamlit as st
-import plotly.express as px
-import plotly.graph_objects as go
+import google.generativeai as genai
+import requests
 from datetime import datetime
 
-# ============================================
-# CONFIGURAÇÃO DE TEMA E CSS
-# ============================================
+st.set_page_config(page_title="🔧 Diagnóstico DeepRisk", layout="wide")
+st.title("🔧 Diagnóstico da API Gemini")
+st.markdown("---")
 
-def aplicar_tema_profissional():
-    """Aplica todo o CSS personalizado ao app"""
+# Verificar se a chave existe
+if "GEMINI_API_KEY" not in st.secrets:
+    st.error("❌ GEMINI_API_KEY não encontrada nos Secrets!")
+    st.stop()
+else:
+    st.success("✅ GEMINI_API_KEY encontrada nos Secrets")
+
+# Mostrar a chave (parcialmente)
+chave = st.secrets["GEMINI_API_KEY"]
+st.info(f"🔑 Chave: {chave[:5]}...{chave[-5:]}")
+
+st.markdown("---")
+
+# 1. TESTE DE CONEXÃO BÁSICA
+st.subheader("1. Teste de Conexão Básica")
+
+try:
+    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+    st.success("✅ genai.configure() executado com sucesso")
+except Exception as e:
+    st.error(f"❌ Erro no configure: {e}")
+
+st.markdown("---")
+
+# 2. LISTAR MODELOS DISPONÍVEIS
+st.subheader("2. Modelos Disponíveis")
+
+try:
+    models = genai.list_models()
     
-    st.markdown("""
-    <style>
-        /* Tema escuro profissional */
-        .stApp {
-            background-color: #0E1117;
-        }
-        
-        /* Cards com gradiente */
-        .metric-card {
-            background: linear-gradient(135deg, #1E1E2E 0%, #2D2D44 100%);
-            border-radius: 15px;
-            padding: 20px;
-            border: 1px solid #3D3D5C;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.3);
-            margin: 10px 0;
-            transition: transform 0.3s;
-        }
-        
-        .metric-card:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 8px 30px rgba(75,75,255,0.2);
-        }
-        
-        .metric-title {
-            color: #9D9DFF;
-            font-size: 14px;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            font-weight: 500;
-        }
-        
-        .metric-value {
-            color: white;
-            font-size: 32px;
-            font-weight: bold;
-            margin: 5px 0;
-            font-family: 'Arial Black', sans-serif;
-        }
-        
-        .metric-delta {
-            color: #4CAF50;
-            font-size: 14px;
-            font-weight: 500;
-        }
-        
-        .metric-delta-negative {
-            color: #FF4B4B;
-            font-size: 14px;
-            font-weight: 500;
-        }
-        
-        /* Alertas com cores */
-        .alert-critical {
-            background: linear-gradient(135deg, #FF4B4B20 0%, #FF4B4B10 100%);
-            border-left: 5px solid #FF4B4B;
-            padding: 15px;
-            border-radius: 10px;
-            margin: 10px 0;
-        }
-        
-        .alert-high {
-            background: linear-gradient(135deg, #FFA64B20 0%, #FFA64B10 100%);
-            border-left: 5px solid #FFA64B;
-            padding: 15px;
-            border-radius: 10px;
-        }
-        
-        .alert-medium {
-            background: linear-gradient(135deg, #FFD70020 0%, #FFD70010 100%);
-            border-left: 5px solid #FFD700;
-            padding: 15px;
-            border-radius: 10px;
-        }
-        
-        .alert-low {
-            background: linear-gradient(135deg, #4CAF5020 0%, #4CAF5010 100%);
-            border-left: 5px solid #4CAF50;
-            padding: 15px;
-            border-radius: 10px;
-        }
-        
-        /* Títulos com gradiente */
-        .gradient-title {
-            background: linear-gradient(90deg, #9D9DFF, #FF9D9D);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            font-size: 48px;
-            font-weight: bold;
-            text-align: center;
-            margin: 20px 0;
-            font-family: 'Arial Black', sans-serif;
-        }
-        
-        .gradient-subtitle {
-            background: linear-gradient(90deg, #9D9DFF, #9D4BFF);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            font-size: 24px;
-            font-weight: bold;
-            margin: 10px 0;
-        }
-        
-        /* Botões personalizados */
-        .stButton > button {
-            background: linear-gradient(90deg, #4B4BFF, #9D4BFF);
-            color: white;
-            border: none;
-            border-radius: 10px;
-            padding: 12px 30px;
-            font-weight: bold;
-            font-size: 16px;
-            transition: all 0.3s;
-            width: 100%;
-            border: 1px solid #6D6DFF;
-        }
-        
-        .stButton > button:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 5px 25px rgba(75,75,255,0.5);
-            border: 1px solid #9D9DFF;
-        }
-        
-        /* Expander personalizado */
-        .streamlit-expanderHeader {
-            background-color: #1E1E2E;
-            border-radius: 10px;
-            border: 1px solid #3D3D5C;
-            color: #9D9DFF;
-            font-weight: bold;
-        }
-        
-        /* Tabs personalizadas */
-        .stTabs [data-baseweb="tab-list"] {
-            gap: 10px;
-            background-color: #1E1E2E;
-            padding: 10px;
-            border-radius: 15px;
-            border: 1px solid #3D3D5C;
-        }
-        
-        .stTabs [data-baseweb="tab"] {
-            border-radius: 10px;
-            padding: 10px 25px;
-            background-color: #2D2D44;
-            color: #9D9DFF;
-            font-weight: 500;
-            border: 1px solid #3D3D5C;
-        }
-        
-        .stTabs [aria-selected="true"] {
-            background: linear-gradient(90deg, #4B4BFF, #9D4BFF);
-            color: white;
-            border: none;
-        }
-        
-        /* Headers */
-        h1, h2, h3 {
-            color: white !important;
-        }
-        
-        /* Texto */
-        p, li {
-            color: #CCCCCC !important;
-        }
-        
-        /* Divisores */
-        hr {
-            background: linear-gradient(90deg, #4B4BFF, #9D4BFF, #4B4BFF);
-            height: 2px;
-            border: none;
-        }
-    </style>
-    """, unsafe_allow_html=True)
-
-
-# ============================================
-# COMPONENTES VISUAIS REUTILIZÁVEIS
-# ============================================
-
-def titulo_principal():
-    """Renderiza o título principal com gradiente"""
-    st.markdown('<h1 class="gradient-title">🛡️ DeepRisk Professional</h1>', unsafe_allow_html=True)
-    st.markdown('<p style="text-align: center; color: #9D9DFF; margin-bottom: 30px;">Auditoria de Risco e Integridade em Apostas Esportivas</p>', unsafe_allow_html=True)
-
-
-def card_metrica(titulo, valor, delta=None, icone="📊", negativo=False):
-    """Cria um card de métrica profissional"""
-    delta_class = "metric-delta-negative" if negativo else "metric-delta"
-    delta_html = f'<div class="{delta_class}">{delta}</div>' if delta else ''
+    st.write(f"**Total de modelos encontrados:** {len(models)}")
     
-    st.markdown(f"""
-    <div class="metric-card">
-        <div class="metric-title">{icone} {titulo}</div>
-        <div class="metric-value">{valor}</div>
-        {delta_html}
-    </div>
-    """, unsafe_allow_html=True)
-
-
-def alerta(tipo, titulo, mensagem):
-    """Renderiza alertas coloridos por severidade"""
-    if tipo == "CRÍTICO":
-        st.markdown(f"""
-        <div class="alert-critical">
-            <strong style="color: #FF4B4B; font-size: 18px;">🚨 {titulo}</strong><br>
-            <span style="color: white;">{mensagem}</span>
-        </div>
-        """, unsafe_allow_html=True)
-    elif tipo == "ALTO":
-        st.markdown(f"""
-        <div class="alert-high">
-            <strong style="color: #FFA64B; font-size: 18px;">⚠️ {titulo}</strong><br>
-            <span style="color: white;">{mensagem}</span>
-        </div>
-        """, unsafe_allow_html=True)
-    elif tipo == "MÉDIO":
-        st.markdown(f"""
-        <div class="alert-medium">
-            <strong style="color: #FFD700; font-size: 18px;">📌 {titulo}</strong><br>
-            <span style="color: white;">{mensagem}</span>
-        </div>
-        """, unsafe_allow_html=True)
+    modelos_com_generate = []
+    modelos_sem_generate = []
+    
+    for m in models:
+        if 'generateContent' in m.supported_generation_methods:
+            modelos_com_generate.append(m.name)
+        else:
+            modelos_sem_generate.append(m.name)
+    
+    st.success(f"✅ {len(modelos_com_generate)} modelos suportam generateContent")
+    
+    if modelos_com_generate:
+        st.write("**Modelos disponíveis para uso:**")
+        for modelo in modelos_com_generate:
+            st.write(f"- `{modelo}`")
     else:
-        st.markdown(f"""
-        <div class="alert-low">
-            <strong style="color: #4CAF50; font-size: 18px;">✅ {titulo}</strong><br>
-            <span style="color: white;">{mensagem}</span>
-        </div>
-        """, unsafe_allow_html=True)
-
-
-def footer_profissional():
-    """Renderiza o rodapé profissional"""
-    st.markdown("---")
-    col1, col2, col3, col4 = st.columns(4)
+        st.error("❌ Nenhum modelo com generateContent encontrado!")
     
-    with col1:
-        st.markdown("**🛡️ DeepRisk v4.0**")
-        st.caption("© 2026 - Todos direitos reservados")
+    st.write(f"**Modelos sem generateContent:** {len(modelos_sem_generate)}")
     
-    with col2:
-        st.markdown("**📧 Suporte**")
-        st.caption("suporte@deeprisk.com")
+except Exception as e:
+    st.error(f"❌ Erro ao listar modelos: {e}")
+
+st.markdown("---")
+
+# 3. TESTAR CADA MODELO INDIVIDUALMENTE
+st.subheader("3. Teste Individual de Modelos")
+
+if modelos_com_generate:
+    for modelo_nome in modelos_com_generate[:5]:  # Testar só os primeiros 5
+        with st.expander(f"Testando: {modelo_nome}"):
+            try:
+                model = genai.GenerativeModel(modelo_nome)
+                st.write("✅ Modelo criado")
+                
+                # Teste mínimo
+                response = model.generate_content(
+                    "Responda apenas 'OK'",
+                    generation_config={
+                        "max_output_tokens": 5,
+                        "temperature": 0.1
+                    }
+                )
+                st.success(f"✅ Resposta: {response.text}")
+                
+            except Exception as e:
+                st.error(f"❌ Erro: {e}")
+                
+                # Análise do erro
+                erro_str = str(e)
+                if "429" in erro_str:
+                    st.warning("⚠️ Erro 429: Cota excedida!")
+                elif "404" in erro_str:
+                    st.warning("⚠️ Erro 404: Modelo não encontrado")
+                elif "403" in erro_str:
+                    st.warning("⚠️ Erro 403: Permissão negada")
+else:
+    st.error("❌ Não há modelos para testar")
+
+st.markdown("---")
+
+# 4. VERIFICAR COTAS (se possível)
+st.subheader("4. Informações de Cota")
+
+try:
+    # Tentar fazer uma requisição para ver headers
+    url = "https://generativelanguage.googleapis.com/v1beta/models"
+    headers = {"x-goog-api-key": st.secrets["GEMINI_API_KEY"]}
     
-    with col3:
-        st.markdown("**🔒 Segurança**")
-        st.caption("ISO 27001 Certified")
+    response = requests.get(url, headers=headers)
     
-    with col4:
-        st.markdown("**📊 Versão**")
-        st.caption("Enterprise Edition")
+    if response.status_code == 200:
+        st.success("✅ API respondendo normalmente")
+        
+        # Verificar headers de cota (se existirem)
+        remaining = response.headers.get('x-ratelimit-remaining', 'N/A')
+        limit = response.headers.get('x-ratelimit-limit', 'N/A')
+        
+        st.info(f"📊 Cotas - Restantes: {remaining} | Limite: {limit}")
+    else:
+        st.error(f"❌ API retornou status {response.status_code}")
+        st.code(response.text)
+        
+except Exception as e:
+    st.error(f"❌ Erro na verificação de cotas: {e}")
 
+st.markdown("---")
 
-# ============================================
-# GRÁFICOS PROFISSIONAIS
-# ============================================
+# 5. HORA DO SISTEMA
+st.subheader("5. Informações de Tempo")
 
-def grafico_distribuicao_horarios(df):
-    """Gráfico de distribuição de apostas por horário"""
-    fig = px.histogram(
-        df, 
-        x='hora',
-        nbins=24,
-        title="📅 Distribuição por Horário",
-        labels={'hora': 'Hora do Dia', 'count': 'Qtd Apostas'},
-        color_discrete_sequence=['#9D9DFF']
-    )
-    fig.update_layout(
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(0,0,0,0)',
-        font_color='white',
-        title_font_color='#9D9DFF',
-        showlegend=False
-    )
-    fig.update_xaxes(gridcolor='#3D3D5C')
-    fig.update_yaxes(gridcolor='#3D3D5C')
-    return fig
+from datetime import datetime
+import pytz
 
+# Horário atual
+agora = datetime.now()
+st.write(f"🕐 Hora local: {agora.strftime('%H:%M:%S')}")
+st.write(f"📅 Data local: {agora.strftime('%d/%m/%Y')}")
 
-def grafico_distribuicao_valores(df):
-    """Gráfico de distribuição de valores"""
-    fig = px.box(
-        df,
-        y='Total stake',
-        title="💰 Distribuição de Valores",
-        points="all",
-        color_discrete_sequence=['#FF9D9D']
-    )
-    fig.update_layout(
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(0,0,0,0)',
-        font_color='white',
-        title_font_color='#9D9DFF'
-    )
-    return fig
+# Horário do Pacífico (onde a cota reseta)
+pacifico = pytz.timezone('US/Pacific')
+hora_pacifico = datetime.now(pacifico)
+st.write(f"🌎 Horário do Pacífico: {hora_pacifico.strftime('%H:%M:%S')}")
 
+# Verificar se é horário de reset
+if hora_pacifico.hour == 0 and hora_pacifico.minute < 10:
+    st.success("✅ Horário de reset (meia-noite no Pacífico)")
+else:
+    st.info(f"⏳ Reset acontece à meia-noite do Pacífico (faltam {24 - hora_pacifico.hour}h)")
 
-def grafico_timeline_apostas(df):
-    """Timeline de apostas interativa"""
-    fig = px.scatter(
-        df,
-        x='Created date',
-        y='Total stake',
-        color='Bet status',
-        size='Bet prices',
-        hover_data=['Bet events'],
-        title='📅 Timeline de Apostas',
-        color_discrete_map={'Ganha': '#4CAF50', 'Perdida': '#FF4B4B'}
-    )
-    fig.update_layout(
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(0,0,0,0)',
-        font_color='white',
-        title_font_color='#9D9DFF'
-    )
-    return fig
+st.markdown("---")
 
+# 6. RECOMENDAÇÕES
+st.subheader("6. Recomendações")
 
-def grafico_top_ligas(df):
-    """Gráfico das ligas mais apostadas"""
-    top_ligas = df['Bet champs'].value_counts().head(5)
-    
-    fig = px.bar(
-        x=top_ligas.values,
-        y=top_ligas.index,
-        orientation='h',
-        title="🌏 Top 5 Ligas",
-        color=top_ligas.values,
-        color_continuous_scale=['#4B4BFF', '#9D4BFF']
-    )
-    fig.update_layout(
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(0,0,0,0)',
-        font_color='white',
-        title_font_color='#9D9DFF',
-        xaxis_title="Quantidade",
-        yaxis_title=""
-    )
-    return fig
+if modelos_com_generate:
+    st.success("✅ Há modelos disponíveis! O problema pode ser no seu código.")
+    st.markdown("""
+    **Sugestões:**
+    1. Use um dos modelos listados acima no seu `app.py`
+    2. Verifique se o modelo está sendo chamado corretamente
+    3. Adicione tratamento de erros mais robusto
+    """)
+else:
+    st.error("❌ Nenhum modelo disponível!")
+    st.markdown("""
+    **Soluções:**
+    1. ⏰ Aguarde até depois das 16h (horário de Brasília)
+    2. 💳 Configure faturamento no Google Cloud
+    3. 🔑 Gere uma nova API key no [Google AI Studio](https://aistudio.google.com)
+    4. 📧 Entre em contato com suporte do Google
+    """)
+
+st.markdown("---")
+st.caption(f"Diagnóstico realizado em: {agora.strftime('%d/%m/%Y %H:%M:%S')}")
