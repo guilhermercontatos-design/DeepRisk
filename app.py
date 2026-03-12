@@ -1,472 +1,364 @@
 import streamlit as st
 import pandas as pd
+import google.generativeai as genai
 from datetime import datetime
 import time
-
-# Importar módulos do core (análise comportamental)
-from core.analisador import AnalisadorComportamentalUltimate
-from core.regras import CategoriaRegras
-from core.validadores import ValidadorOdds
-
-# Importar layout (componentes visuais)
-from layout.estilos import aplicar_tema_profissional
-from layout.componentes import *
+import csv
+from io import StringIO
+import chardet
+import re
+import requests
+import numpy as np
+from scipy import stats
 
 # ============================================
-# CONFIGURAÇÃO INICIAL
+# FUNÇÃO 1: LEITOR UNIVERSAL DE PLANILHAS
 # ============================================
+def processar_planilha_universal(arquivo):
+    """LEITOR UNIVERSAL - Aceita qualquer formato de planilha"""
+    
+    nome_arquivo = arquivo.name.lower()
+    
+    # Se for Excel
+    if nome_arquivo.endswith('.xlsx') or nome_arquivo.endswith('.xls'):
+        try:
+            df = pd.read_excel(arquivo)
+            st.success(f"✅ Excel lido com sucesso! {len(df)} linhas")
+            return df
+        except Exception as e:
+            st.error(f"Erro ao ler Excel: {e}")
+            return None
+    
+    # Se for CSV
+    else:
+        # Detectar encoding
+        conteudo_bruto = arquivo.read()
+        try:
+            encoding = chardet.detect(conteudo_bruto)['encoding'] or 'utf-8'
+            conteudo = conteudo_bruto.decode(encoding)
+        except:
+            conteudo = conteudo_bruto.decode('latin1')
+        
+        # Detectar separador
+        primeira_linha = conteudo.split('\n')[0] if conteudo else ''
+        separadores = [',', ';', '\t', '|']
+        separador = ','
+        maior = 0
+        for sep in separadores:
+            if primeira_linha.count(sep) > maior:
+                maior = primeira_linha.count(sep)
+                separador = sep
+        
+        # Tentar ler com pandas
+        try:
+            from io import StringIO
+            df = pd.read_csv(StringIO(conteudo), sep=separador, engine='python', 
+                           skipinitialspace=True, on_bad_lines='skip')
+            st.success(f"✅ CSV lido com sucesso! {len(df)} linhas")
+            return df
+        except:
+            # Leitura manual como fallback
+            linhas = [l.strip() for l in conteudo.split('\n') if l.strip()]
+            if not linhas:
+                return None
+            
+            cabecalho = [h.strip().strip('"') for h in linhas[0].split(separador)]
+            dados = []
+            for linha in linhas[1:]:
+                valores = [v.strip().strip('"') for v in linha.split(separador)]
+                if len(valores) == len(cabecalho):
+                    dados.append(valores)
+            
+            if dados:
+                return pd.DataFrame(dados, columns=cabecalho)
+            return None
 
+# ============================================
+# FUNÇÃO 2: NORMALIZADOR DE COLUNAS
+# ============================================
+def normalizar_colunas(df):
+    """Normaliza os nomes das colunas para o padrão DeepRisk"""
+    
+    # Mapeamento de nomes possíveis para o padrão
+    mapping = {
+        'player': 'Player name',
+        'player name': 'Player name',
+        'nome': 'Player name',
+        'jogador': 'Player name',
+        
+        'bet id': 'Bet id',
+        'id': 'Bet id',
+        'aposta id': 'Bet id',
+        
+        'created date': 'Created date',
+        'data': 'Created date',
+        'data aposta': 'Created date',
+        
+        'bet event date': 'Bet event date',
+        'event date': 'Bet event date',
+        'data evento': 'Bet event date',
+        
+        'bet sports': 'Bet sports',
+        'sports': 'Bet sports',
+        'esporte': 'Bet sports',
+        
+        'bet champs': 'Bet champs',
+        'champs': 'Bet champs',
+        'liga': 'Bet champs',
+        'campeonato': 'Bet champs',
+        
+        'bet events': 'Bet events',
+        'events': 'Bet events',
+        'evento': 'Bet events',
+        'jogo': 'Bet events',
+        
+        'bet markets': 'Bet markets',
+        'markets': 'Bet markets',
+        'mercado': 'Bet markets',
+        
+        'bet prices': 'Bet prices',
+        'prices': 'Bet prices',
+        'odds': 'Bet prices',
+        'cota': 'Bet prices',
+        
+        'total stake': 'Total stake',
+        'stake': 'Total stake',
+        'valor': 'Total stake',
+        'aposta': 'Total stake',
+        
+        'bet status': 'Bet status',
+        'status': 'Bet status',
+        'resultado': 'Bet status'
+    }
+    
+    # Colunas que queremos no final
+    colunas_esperadas = [
+        'Player name', 'Bet id', 'Created date', 'Bet event date',
+        'Bet sports', 'Bet champs', 'Bet events', 'Bet markets', 
+        'Bet prices', 'Total stake', 'Bet status'
+    ]
+    
+    # Criar novo DataFrame com colunas normalizadas
+    novo_df = pd.DataFrame()
+    
+    for col_esperada in colunas_esperadas:
+        encontrada = False
+        
+        # Procurar correspondência exata
+        if col_esperada in df.columns:
+            novo_df[col_esperada] = df[col_esperada]
+            encontrada = True
+        else:
+            # Procurar correspondência aproximada
+            for col_original in df.columns:
+                col_clean = re.sub(r'[^a-zA-Z]', '', col_original.lower())
+                for chave, valor in mapping.items():
+                    chave_clean = re.sub(r'[^a-zA-Z]', '', chave.lower())
+                    if chave_clean in col_clean or col_clean in chave_clean:
+                        novo_df[col_esperada] = df[col_original]
+                        encontrada = True
+                        break
+                if encontrada:
+                    break
+        
+        # Se não encontrou, criar coluna vazia
+        if not encontrada:
+            novo_df[col_esperada] = None
+    
+    return novo_df
+
+# ============================================
+# FUNÇÃO 3: ANALISADOR SIMPLES (sem precisar dos arquivos core)
+# ============================================
+def analisar_padroes_simples(df):
+    """Análise básica de padrões sem precisar dos arquivos core"""
+    
+    alertas = []
+    pontuacao = 0
+    
+    # 1. Analisar valores de aposta
+    if 'Total stake' in df.columns:
+        valores = pd.to_numeric(df['Total stake'], errors='coerce')
+        
+        # Verificar R$ 495
+        count_495 = len(valores[valores == 495.00])
+        if count_495 > 0:
+            percentual = (count_495 / len(df)) * 100
+            alertas.append({
+                'severidade': 'ALTA' if percentual > 50 else 'MÉDIA',
+                'titulo': '💰 Valores de R$ 495,00',
+                'descricao': f'{count_495} apostas ({percentual:.1f}%) com valor R$ 495,00'
+            })
+            pontuacao += 3 if percentual > 50 else 2
+    
+    # 2. Analisar ligas
+    if 'Bet champs' in df.columns:
+        ligas_suspeitas = ['Vietnam', 'Indonésia', 'Mianmar', 'Camboja', 'Laos']
+        count_ligas = 0
+        for liga in ligas_suspeitas:
+            count_ligas += len(df[df['Bet champs'].str.contains(liga, case=False, na=False)])
+        
+        if count_ligas > 0:
+            percentual = (count_ligas / len(df)) * 100
+            alertas.append({
+                'severidade': 'ALTA' if percentual > 30 else 'MÉDIA',
+                'titulo': '🌏 Ligas de Baixa Liquidez',
+                'descricao': f'{count_ligas} apostas ({percentual:.1f}%) em ligas suspeitas'
+            })
+            pontuacao += 3 if percentual > 30 else 2
+    
+    # 3. Analisar odds quebradas
+    if 'Bet prices' in df.columns:
+        odds = pd.to_numeric(df['Bet prices'], errors='coerce')
+        quebradas = odds.apply(lambda x: len(str(x).split('.')[-1]) > 2 if '.' in str(x) else False)
+        count_quebradas = quebradas.sum()
+        
+        if count_quebradas > 0:
+            percentual = (count_quebradas / len(df)) * 100
+            alertas.append({
+                'severidade': 'MÉDIA' if percentual > 30 else 'BAIXA',
+                'titulo': '🎲 Odds Quebradas',
+                'descricao': f'{count_quebradas} apostas ({percentual:.1f}%) com odds quebradas'
+            })
+            pontuacao += 2 if percentual > 30 else 1
+    
+    # 4. Analisar taxa de acerto
+    if 'Bet status' in df.columns:
+        ganhas = len(df[df['Bet status'].str.contains('Ganha', case=False, na=False)])
+        taxa = (ganhas / len(df)) * 100 if len(df) > 0 else 0
+        
+        if taxa > 65:
+            alertas.append({
+                'severidade': 'CRÍTICA',
+                'titulo': '📊 Taxa de Acerto Anormal',
+                'descricao': f'Taxa de acerto de {taxa:.1f}% ({ganhas} ganhas em {len(df)})'
+            })
+            pontuacao += 5
+        elif taxa > 55:
+            alertas.append({
+                'severidade': 'MÉDIA',
+                'titulo': '📊 Taxa de Acerto Elevada',
+                'descricao': f'Taxa de acerto de {taxa:.1f}%'
+            })
+            pontuacao += 2
+    
+    # Classificar perfil
+    if pontuacao > 10:
+        perfil = "🚨 CRÍTICO - ARBITRAGEM PROFISSIONAL"
+    elif pontuacao > 5:
+        perfil = "⚠️ ALTO - PROFISSIONAL"
+    elif pontuacao > 2:
+        perfil = "🔍 MÉDIO - ATENÇÃO"
+    else:
+        perfil = "✅ RECREATIVO - BAIXO RISCO"
+    
+    return {
+        'perfil': perfil,
+        'pontuacao': pontuacao,
+        'alertas': alertas
+    }
+
+# ============================================
+# CONFIGURAÇÃO DA PÁGINA
+# ============================================
 st.set_page_config(
-    page_title="DeepRisk Ultimate",
+    page_title="DeepRisk",
     page_icon="🛡️",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    layout="wide"
 )
 
-# Aplicar tema profissional
-aplicar_tema_profissional()
-
-# Título principal
+# Título
 st.markdown("""
-<h1 style="background: linear-gradient(90deg, #9D9DFF, #FF9D9D); 
-           -webkit-background-clip: text; 
-           -webkit-text-fill-color: transparent; 
-           font-size: 48px; 
-           font-weight: bold; 
-           text-align: center; 
-           margin: 20px 0;">
-    🛡️ DeepRisk Ultimate
+<h1 style="color: #1A2B3C; font-size: 36px; font-weight: 600; text-align: center;">
+    🛡️ DeepRisk
 </h1>
-<p style="text-align: center; color: #9D9DFF; margin-bottom: 30px;">
-    Auditoria Comportamental com 200+ Regras
+<p style="color: #5D6D7E; font-size: 16px; text-align: center; margin-bottom: 30px;">
+    Auditoria de Integridade em Apostas Esportivas
 </p>
 """, unsafe_allow_html=True)
 
 # ============================================
-# CONFIGURAÇÃO DAS APIS
+# UPLOAD DO ARQUIVO
 # ============================================
-
-if "GEMINI_API_KEY" not in st.secrets:
-    st.error("❌ Configure sua GEMINI_API_KEY nos Secrets")
-    st.stop()
-
-# The Odds API
-ODDS_API_KEY = "3dd5323db5132e0a04840136ac9f0556"
-
-# Sidebar com informações
-with st.sidebar:
-    st.image("https://via.placeholder.com/300x100/1E1E2E/9D9DFF?text=DeepRisk+Ultimate", use_column_width=True)
-    
-    st.markdown("### ⚙️ Configurações")
-    
-    sensibilidade = st.select_slider(
-        "Sensibilidade da Análise",
-        options=["Baixa", "Média", "Alta", "Crítica"],
-        value="Alta"
-    )
-    
-    validar_odds = st.checkbox("🔍 Validar com The Odds API", value=True)
-    
-    st.markdown("---")
-    st.markdown("### 📊 Estatísticas do Sistema")
-    st.metric("Total Análises", "1.247", "+23%")
-    st.metric("Alertas Ativos", "12", "3 críticos")
-    st.metric("Regras Carregadas", "200+", "12 categorias")
-    
-    st.markdown("---")
-    st.markdown("### 🎯 Versão")
-    st.caption("DeepRisk Ultimate 4.0")
-    st.caption("200+ Regras de Análise")
-    st.caption("12 Categorias Comportamentais")
-    st.caption("Integração The Odds API")
-
-# ============================================
-# FUNÇÃO PARA PROCESSAR CSV
-# ============================================
-
-def processar_csv(arquivo):
-    """Processa CSV com formato da Altenar"""
-    content = arquivo.read().decode('utf-8')
-    lines = content.strip().split('\n')
-    
-    # Processar cabeçalho
-    header_line = lines[0].strip()
-    if header_line.startswith('"') and header_line.endswith('"'):
-        header_line = header_line.strip('"')
-    header = header_line.split(',')
-    
-    # Processar dados
-    data = []
-    for line in lines[1:]:
-        if line.strip():
-            clean_line = line.strip()
-            if clean_line.startswith('"') and clean_line.endswith('"'):
-                clean_line = clean_line.strip('"')
-            values = clean_line.split(',')
-            data.append(values)
-    
-    df = pd.DataFrame(data, columns=header)
-    
-    # Converter colunas numéricas
-    for col in ['Bet prices', 'Total stake', 'Real win']:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
-    
-    # Converter datas
-    for col in ['Created date', 'Bet event date', 'Settlement date']:
-        if col in df.columns:
-            df[col] = pd.to_datetime(df[col], errors='coerce')
-    
-    return df
-
-# ============================================
-# INTERFACE PRINCIPAL
-# ============================================
-
-st.markdown("### 📤 Upload da Betlist")
 uploaded_file = st.file_uploader(
-    "Arraste ou selecione o arquivo CSV/Excel",
-    type=['csv', 'xlsx'],
-    help="Formatos aceitos: CSV (com aspas) ou XLSX"
+    "📤 Selecione a planilha de apostas",
+    type=['csv', 'xlsx', 'xls']
 )
 
 if uploaded_file is not None:
     try:
-        # Carregar dados
-        if uploaded_file.name.endswith('.csv'):
-            df = processar_csv(uploaded_file)
-        else:
-            df = pd.read_excel(uploaded_file)
+        # Ler a planilha
+        df = processar_planilha_universal(uploaded_file)
         
-        st.success(f"✅ Arquivo carregado! {len(df)} apostas encontradas")
+        if df is None or df.empty:
+            st.error("Não foi possível ler o arquivo")
+            st.stop()
         
-        # Identificar jogador
-        if 'Player name' in df.columns:
-            jogador = df['Player name'].iloc[0]
-            st.markdown(f"### 📊 Analisando jogador: **{jogador}**")
+        # Normalizar colunas
+        df = normalizar_colunas(df)
         
-        # Mostrar preview dos dados
-        with st.expander("👁️ Visualizar dados brutos (primeiras 10 linhas)"):
-            st.dataframe(df.head(10), use_container_width=True)
+        st.success(f"✅ Arquivo processado! {len(df)} apostas encontradas")
+        
+        # Mostrar preview
+        with st.expander("👁️ Ver dados"):
+            st.dataframe(df.head(10))
         
         # Informações básicas
-        col_info1, col_info2, col_info3 = st.columns(3)
-        with col_info1:
-            st.info(f"📅 Período: {df['Created date'].min().strftime('%d/%m/%Y') if 'Created date' in df.columns else 'N/A'} a {df['Created date'].max().strftime('%d/%m/%Y') if 'Created date' in df.columns else 'N/A'}")
-        with col_info2:
-            st.info(f"💰 Total apostado: R$ {df['Total stake'].sum():,.2f}" if 'Total stake' in df.columns else "💰 Total: N/A")
-        with col_info3:
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Total Apostas", len(df))
+        with col2:
+            if 'Total stake' in df.columns:
+                st.metric("Total Apostado", f"R$ {pd.to_numeric(df['Total stake'], errors='coerce').sum():,.2f}")
+        with col3:
             if 'Bet status' in df.columns:
-                ganhas = len(df[df['Bet status'] == 'Ganha'])
-                st.info(f"📊 Taxa acerto: {(ganhas/len(df)*100):.1f}%")
+                ganhas = len(df[df['Bet status'].str.contains('Ganha', case=False, na=False)])
+                st.metric("Taxa Acerto", f"{(ganhas/len(df)*100):.1f}%")
         
         # Botão de análise
-        if st.button("🚀 INICIAR ANÁLISE COMPLETA (200+ REGRAS)", use_container_width=True):
+        if st.button("🔍 INICIAR ANÁLISE", use_container_width=True):
             
-            with st.spinner("🔍 DeepRisk Ultimate analisando padrões comportamentais..."):
+            with st.spinner("Analisando padrões..."):
                 
-                # Criar analisador
-                analisador = AnalisadorComportamentalUltimate(
-                    df, 
-                    odds_api_key=ODDS_API_KEY if validar_odds else None
-                )
+                # Analisar
+                resultado = analisar_padroes_simples(df)
                 
-                # Executar TODAS as análises
-                resultado = analisador.analisar_tudo()
-                
-                # ============================================
-                # 1. PERFIL DE RISCO
-                # ============================================
+                # Mostrar resultado
                 st.markdown("---")
                 st.markdown("## 📊 RESULTADO DA ANÁLISE")
                 
-                col1, col2, col3 = st.columns(3)
-                
-                with col1:
-                    cor_perfil = resultado['perfil']['cor']
-                    st.markdown(f"""
-                    <div style="background-color: {cor_perfil}20; 
-                                border-left: 5px solid {cor_perfil};
-                                padding: 20px; 
-                                border-radius: 10px;
-                                height: 150px;">
-                        <h3 style="color: {cor_perfil}; margin-top: 0;">{resultado['perfil']['classificacao']}</h3>
-                        <p style="color: white; margin-bottom: 0;">{resultado['perfil']['descricao']}</p>
-                    </div>
-                    """, unsafe_allow_html=True)
-                
-                with col2:
-                    card_metrica(
-                        "Pontuação de Risco",
-                        str(resultado['pontuacao']),
-                        f"{len(resultado['alertas'])} alertas gerados",
-                        "⚠️"
-                    )
-                
-                with col3:
-                    card_metrica(
-                        "Apostas Analisadas",
-                        str(resultado['total_apostas']),
-                        f"{resultado['total_apostas']} registros processados",
-                        "📊"
-                    )
-                
-                # ============================================
-                # 2. ALERTAS POR CATEGORIA
-                # ============================================
-                if resultado['alertas']:
-                    st.markdown("---")
-                    st.markdown("## 🚨 ALERTAS DETECTADOS")
-                    
-                    # Agrupar por severidade
-                    criticos = [a for a in resultado['alertas'] if a['severidade'] == 'CRÍTICA']
-                    altos = [a for a in resultado['alertas'] if a['severidade'] == 'ALTA']
-                    medios = [a for a in resultado['alertas'] if a['severidade'] == 'MÉDIA']
-                    baixos = [a for a in resultado['alertas'] if a['severidade'] == 'BAIXA']
-                    
-                    # Mostrar críticos primeiro
-                    if criticos:
-                        st.markdown("### 🚨 ALERTAS CRÍTICOS")
-                        for alerta in criticos:
-                            alerta_componente(
-                                "CRÍTICO",
-                                alerta['titulo'],
-                                alerta['descricao'],
-                                alerta.get('evidencias', [])
-                            )
-                    
-                    if altos:
-                        st.markdown("### ⚠️ ALERTAS DE ALTA SEVERIDADE")
-                        for alerta in altos:
-                            alerta_componente(
-                                "ALTO",
-                                alerta['titulo'],
-                                alerta['descricao'],
-                                alerta.get('evidencias', [])
-                            )
-                    
-                    if medios:
-                        st.markdown("### 🔍 ALERTAS DE MÉDIA SEVERIDADE")
-                        for alerta in medios:
-                            alerta_componente(
-                                "MÉDIO",
-                                alerta['titulo'],
-                                alerta['descricao'],
-                                alerta.get('evidencias', [])
-                            )
-                    
-                    if baixos:
-                        st.markdown("### 📌 ALERTAS DE BAIXA SEVERIDADE")
-                        for alerta in baixos:
-                            alerta_componente(
-                                "BAIXO",
-                                alerta['titulo'],
-                                alerta['descricao'],
-                                alerta.get('evidencias', [])
-                            )
+                # Perfil
+                if "CRÍTICO" in resultado['perfil']:
+                    st.error(f"### {resultado['perfil']}")
+                elif "ALTO" in resultado['perfil']:
+                    st.warning(f"### {resultado['perfil']}")
+                elif "MÉDIO" in resultado['perfil']:
+                    st.info(f"### {resultado['perfil']}")
                 else:
-                    st.success("✅ Nenhum alerta detectado! Comportamento dentro do esperado.")
+                    st.success(f"### {resultado['perfil']}")
                 
-                # ============================================
-                # 3. ODDS INCONSISTENTES
-                # ============================================
-                if resultado.get('odds_inconsistentes') and len(resultado['odds_inconsistentes']) > 0:
-                    st.markdown("---")
-                    st.markdown("## 🎲 ODDS INCONSISTENTES COM MERCADO")
-                    
-                    st.warning(f"**{len(resultado['odds_inconsistentes'])} odds inconsistentes detectadas!**")
-                    
-                    # Criar DataFrame para visualização
-                    df_odds = pd.DataFrame(resultado['odds_inconsistentes'])
-                    st.dataframe(df_odds, use_container_width=True)
-                    
-                    # Estatísticas das odds inconsistentes
-                    col_odds1, col_odds2, col_odds3 = st.columns(3)
-                    with col_odds1:
-                        desvios = [abs(o['desvio_percentual']) for o in resultado['odds_inconsistentes']]
-                        st.metric("Maior Desvio", f"{max(desvios):.1f}%" if desvios else "N/A")
-                    with col_odds2:
-                        st.metric("Total Eventos", len(resultado['odds_inconsistentes']))
-                    with col_odds3:
-                        st.metric("Classificação", "CRÍTICO")
-                
-                # ============================================
-                # 4. RELATÓRIO DA IA
-                # ============================================
-                st.markdown("---")
-                st.markdown("## 📋 RELATÓRIO EXECUTIVO")
-                
-                # Preparar prompt para IA
-                prompt = f"""
-Você é um especialista sênior em integridade de apostas esportivas com 20 anos de experiência.
-
-ANÁLISE COMPORTAMENTAL COMPLETA:
-================================
-Jogador: {jogador if 'jogador' in locals() else 'Desconhecido'}
-Total de apostas: {resultado['total_apostas']}
-Pontuação de risco: {resultado['pontuacao']}
-Perfil classificado: {resultado['perfil']['classificacao']}
-
-ALERTAS DETECTADOS ({len(resultado['alertas'])}):
-{chr(10).join([f"- [{a['severidade']}] {a['titulo']}: {a['descricao']}" for a in resultado['alertas'][:10]])}
-
-ODDS INCONSISTENTES: {len(resultado.get('odds_inconsistentes', []))}
-
-Com base em TODAS as evidências acima, forneça um relatório executivo contendo:
-
-1. **RESUMO EXECUTIVO** (2-3 frases sobre o perfil do jogador)
-
-2. **PRINCIPAIS PADRÕES DE RISCO** (liste os 5 principais com base nos alertas mais graves)
-
-3. **EVIDÊNCIAS CONCRETAS** (para cada padrão, cite números e exemplos específicos)
-
-4. **RECOMENDAÇÕES DE AÇÃO** (o que fazer AGORA, em 24h, e em 30 dias)
-
-5. **PROBABILIDADE DE FRAUDE** (baixa, média, alta, certeza) baseada nas evidências
-
-Seja detalhista e profissional. Use dados concretos dos alertas.
-"""
-                
-                # Chamar Gemini
-                try:
-                    import google.generativeai as genai
-                    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-                    
-                    # Tentar modelos em ordem
-                    modelos = [
-                        'models/gemini-2.5-flash-lite',
-                        'models/gemini-2.5-flash',
-                        'models/gemini-2.0-flash'
-                    ]
-                    
-                    model = None
-                    for modelo in modelos:
-                        try:
-                            model = genai.GenerativeModel(modelo)
-                            # Teste rápido
-                            test = model.generate_content("teste", generation_config={"max_output_tokens": 1})
-                            st.caption(f"🤖 Modelo utilizado: {modelo}")
-                            break
-                        except:
-                            continue
-                    
-                    if model:
-                        response = model.generate_content(prompt)
-                        st.info(response.text)
-                    else:
-                        st.error("Nenhum modelo Gemini disponível no momento")
-                        
-                except Exception as e:
-                    st.error(f"Erro ao gerar relatório com IA: {e}")
-                    st.write("**Resumo manual baseado nos alertas:**")
-                    if resultado['alertas']:
-                        st.write(f"Jogador classificado como **{resultado['perfil']['classificacao']}** com {len(resultado['alertas'])} alertas.")
-                        if resultado['pontuacao'] > 20:
-                            st.write("Recomendação: **BLOQUEIO IMEDIATO**")
-                        elif resultado['pontuacao'] > 10:
-                            st.write("Recomendação: **MONITORAMENTO INTENSIVO**")
+                # Alertas
+                if resultado['alertas']:
+                    st.markdown("### 🚨 Alertas Detectados")
+                    for alerta in resultado['alertas']:
+                        if alerta['severidade'] == 'CRÍTICA':
+                            st.error(f"**{alerta['titulo']}** - {alerta['descricao']}")
+                        elif alerta['severidade'] == 'ALTA':
+                            st.warning(f"**{alerta['titulo']}** - {alerta['descricao']}")
                         else:
-                            st.write("Recomendação: **ACOMPANHAMENTO PADRÃO**")
+                            st.info(f"**{alerta['titulo']}** - {alerta['descricao']}")
+                else:
+                    st.success("✅ Nenhum padrão suspeito detectado")
                 
-                # ============================================
-                # 5. BOTÃO DE DOWNLOAD
-                # ============================================
-                st.markdown("---")
-                
-                # Gerar relatório completo
-                relatorio_texto = f"""
-RELATÓRIO DEEPRISK ULTIMATE
-============================
-Data: {datetime.now().strftime('%d/%m/%Y %H:%M')}
-Jogador: {jogador if 'jogador' in locals() else 'N/A'}
-Total Apostas: {resultado['total_apostas']}
-Pontuação Risco: {resultado['pontuacao']}
-Perfil: {resultado['perfil']['classificacao']}
-
-ALERTAS DETECTADOS:
-{chr(10).join([f"[{a['severidade']}] {a['titulo']}: {a['descricao']}" for a in resultado['alertas']])}
-
-ODDS INCONSISTENTES: {len(resultado.get('odds_inconsistentes', []))}
-
-RECOMENDAÇÕES AUTOMATIZADAS:
-1. {"🚨 BLOQUEIO IMEDIATO" if resultado['pontuacao'] > 20 else "⚠️ MONITORAMENTO INTENSIVO" if resultado['pontuacao'] > 10 else "✅ ACOMPANHAMENTO PADRÃO"}
-2. {"🔍 REVISAR TODAS AS APOSTAS" if len(resultado.get('odds_inconsistentes', [])) > 0 else "📊 ANÁLISE DE PADRÕES"}
-3. {"👥 VERIFICAR CONTAS RELACIONADAS" if resultado['pontuacao'] > 15 else "📈 AGUARDAR PRÓXIMAS APOSTAS"}
-
-Documento gerado automaticamente pelo DeepRisk Ultimate v4.0 em {datetime.now().strftime('%d/%m/%Y %H:%M')}
-"""
-                
-                st.download_button(
-                    label="📥 Baixar Relatório Completo (TXT)",
-                    data=relatorio_texto,
-                    file_name=f"deeprisk_ultimate_{datetime.now().strftime('%Y%m%d_%H%M')}.txt",
-                    mime="text/plain"
-                )
+                # Pontuação
+                st.metric("Pontuação de Risco", resultado['pontuacao'])
                 
                 st.balloons()
         
     except Exception as e:
-        st.error(f"❌ Erro ao processar arquivo: {e}")
+        st.error(f"Erro: {e}")
         st.exception(e)
 
 else:
-    # ============================================
-    # ESTADO INICIAL (SEM ARQUIVO)
-    # ============================================
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        st.markdown("""
-        <div class="metric-card">
-            <div class="metric-title">📋 Regras de Análise</div>
-            <div class="metric-value">200+</div>
-            <div style="color: #4CAF50;">12 categorias</div>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col2:
-        st.markdown("""
-        <div class="metric-card">
-            <div class="metric-title">🎯 Precisão</div>
-            <div class="metric-value">99.7%</div>
-            <div style="color: #4CAF50;">Testado com 10k+ casos</div>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col3:
-        st.markdown("""
-        <div class="metric-card">
-            <div class="metric-title">🔌 Integrações</div>
-            <div class="metric-value">3 APIs</div>
-            <div style="color: #4CAF50;">Gemini + Odds + Cache</div>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    st.markdown("""
-    <div style="text-align: center; padding: 40px; background: linear-gradient(135deg, #1E1E2E20 0%, #2D2D4420 100%); border-radius: 20px; margin-top: 20px; border: 1px dashed #3D3D5C;">
-        <h3 style="color: #9D9DFF;">📤 Aguardando Upload</h3>
-        <p style="color: #CCCCCC;">Arraste um arquivo CSV ou Excel para iniciar a análise com 200+ regras comportamentais</p>
-        <p style="color: #666666; font-size: 12px; margin-top: 20px;">Formatos aceitos: CSV (com aspas duplas) ou XLSX</p>
-    </div>
-    """, unsafe_allow_html=True)
-
-# ============================================
-# RODAPÉ
-# ============================================
-
-st.markdown("---")
-col1, col2, col3, col4 = st.columns(4)
-
-with col1:
-    st.markdown("**🛡️ DeepRisk Ultimate**")
-    st.caption("© 2026 - Todos direitos reservados")
-with col2:
-    st.markdown("**📊 Versão**")
-    st.caption("4.0.0 - Enterprise")
-with col3:
-    st.markdown("**⚡ Performance**")
-    st.caption("200+ regras | 12 categorias")
-with col4:
-    st.markdown("**🔒 Certificação**")
-    st.caption("ISO 27001 | GDPR")
+    # Estado inicial
+    st.info("📤 Aguardando upload da planilha")
