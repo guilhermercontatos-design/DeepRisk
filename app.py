@@ -5,7 +5,7 @@ from datetime import datetime
 import requests
 import time
 
-# ⚡ IMPORTAR O LAYOUT PROFISSIONAL
+# ⚡ IMPORTAR O LAYOUT PROFISSIONAL (apenas UMA vez)
 from layout import *
 
 # ============================================
@@ -29,15 +29,17 @@ if "GEMINI_API_KEY" not in st.secrets:
 try:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
     
-    # Lista de modelos para tentar
+    # LISTA DE MODELOS PARA TENTAR (do mais leve ao mais pesado)
     modelos_para_tentar = [
-        'models/gemini-2.0-flash',
-        'models/gemini-2.0-flash-lite',
-        'models/gemini-2.5-flash',
+        'models/gemini-2.5-flash-lite',  # 1.000 req/dia
+        'models/gemini-2.5-flash',       # 250 req/dia
+        'models/gemini-2.0-flash',       # Legacy
+        'models/gemini-2.0-flash-lite',  # Legacy leve
     ]
     
     model = None
     modelo_escolhido = None
+    erros_encontrados = []
     
     # Barra de progresso para tentativas
     progress_bar = st.progress(0)
@@ -48,26 +50,39 @@ try:
         status_text.text(f"🔄 Tentando conectar com: {modelo_nome}")
         
         try:
+            # Tentar criar o modelo
             model_test = genai.GenerativeModel(modelo_nome)
+            
+            # Teste mínimo para verificar se funciona
             test_response = model_test.generate_content(
                 "teste",
-                generation_config={"max_output_tokens": 1}
+                generation_config={
+                    "max_output_tokens": 1,
+                    "temperature": 0.1
+                }
             )
+            
+            # Se chegou aqui, funcionou!
             model = model_test
             modelo_escolhido = modelo_nome
-            status_text.text(f"✅ Conectado: {modelo_nome}")
+            status_text.text(f"✅ Conectado com sucesso: {modelo_nome}")
             break
             
         except Exception as e:
-            if "429" in str(e):
-                status_text.text(f"⚠️ {modelo_nome} sem cota")
+            erro_msg = str(e)
+            erros_encontrados.append(f"{modelo_nome}: {erro_msg[:100]}...")
+            
+            if "429" in erro_msg:
+                status_text.text(f"⚠️ {modelo_nome} sem cota no momento")
+            else:
+                status_text.text(f"❌ {modelo_nome} não disponível")
             continue
     
     # Limpar progresso
     progress_bar.empty()
     status_text.empty()
     
-    # Verificar se conectou
+    # Verificar se algum modelo funcionou
     if model is None:
         st.error("❌ NENHUM MODELO DISPONÍVEL NO MOMENTO")
         st.info("""
@@ -77,6 +92,8 @@ try:
         1. Aguarde algumas horas e tente novamente
         2. Configure faturamento no Google Cloud para limites maiores
         3. Use uma API key diferente se tiver
+        
+        As cotas geralmente resetam à meia-noite (horário do Pacífico).
         """)
         st.stop()
     
@@ -87,7 +104,7 @@ try:
     st.success(f"✅ APIs configuradas! Modelo ativo: **{modelo_escolhido}**")
     
 except Exception as e:
-    st.error(f"Erro na configuração: {e}")
+    st.error(f"Erro crítico na configuração: {e}")
     st.stop()
 
 # ============================================
@@ -172,6 +189,7 @@ def calcular_metricas_comportamentais(df):
         
         metricas['apostas_madrugada'] = len(df[df['hora'].between(0, 5)])
         
+        # Apostas em lote
         apostas_por_minuto = df.groupby('minuto_exato').size()
         minutos_lote = apostas_por_minuto[apostas_por_minuto > 2]
         metricas['apostas_em_lote'] = minutos_lote.sum() if len(minutos_lote) > 0 else 0
@@ -242,10 +260,12 @@ def validar_odds_com_api(df, odds_api_key):
                         odds_apostada = float(aposta['Bet prices'])
                         nome_evento = aposta['Bet events']
                         
+                        # Procurar evento correspondente
                         for evento in eventos:
                             evento_nome = f"{evento['home_team']} vs {evento['away_team']}"
                             if any(time.lower() in nome_evento.lower() for time in [evento['home_team'], evento['away_team']]):
                                 
+                                # Coletar odds do mercado
                                 odds_list = []
                                 for bookmaker in evento.get('bookmakers', []):
                                     for market in bookmaker.get('markets', []):
@@ -256,7 +276,7 @@ def validar_odds_com_api(df, odds_api_key):
                                     odds_media = sum(odds_list) / len(odds_list)
                                     desvio = ((odds_apostada - odds_media) / odds_media) * 100
                                     
-                                    if abs(desvio) > 15:
+                                    if abs(desvio) > 15:  # Desvio significativo
                                         odds_inconsistentes.append({
                                             'Bet ID': aposta['Bet id'],
                                             'Evento': nome_evento,
@@ -267,7 +287,7 @@ def validar_odds_com_api(df, odds_api_key):
                                         })
                                 break
                     
-                    time.sleep(0.2)
+                    time.sleep(0.2)  # Delay para não sobrecarregar
                     
                 except Exception as e:
                     continue
@@ -347,22 +367,28 @@ if uploaded_file is not None:
                 
                 card_metrica(
                     "Modelo Ativo",
-                    modelo_escolhido.split('/')[-1],
-                    "Gemini 2.0"
+                    modelo_escolhido.split('/')[-1] if modelo_escolhido else "N/A",
+                    "Gemini"
                 )
             
             # Gráficos
             if 'hora' in df.columns:
-                st.plotly_chart(grafico_distribuicao_horarios(df), use_container_width=True)
+                fig = grafico_distribuicao_horarios(df)
+                if fig:
+                    st.plotly_chart(fig, use_container_width=True)
             
             col_g1, col_g2 = st.columns(2)
             with col_g1:
                 if 'Total stake' in df.columns:
-                    st.plotly_chart(grafico_distribuicao_valores(df), use_container_width=True)
+                    fig = grafico_distribuicao_valores(df)
+                    if fig:
+                        st.plotly_chart(fig, use_container_width=True)
             
             with col_g2:
                 if 'Bet champs' in df.columns:
-                    st.plotly_chart(grafico_top_ligas(df), use_container_width=True)
+                    fig = grafico_top_ligas(df)
+                    if fig:
+                        st.plotly_chart(fig, use_container_width=True)
         
         with tab2:
             if 'Bet prices' in df.columns:
@@ -406,8 +432,6 @@ if uploaded_file is not None:
                     odds_inconsistentes = validar_odds_com_api(df, ODDS_API_KEY)
                 
                 # Preparar prompt para IA
-                dados_audit = df.head(50).to_string()
-                
                 prompt = f"""
 Você é um especialista sênior em integridade de apostas esportivas da Altenar.
 
@@ -424,9 +448,9 @@ Eventos repetidos: {metricas.get('eventos_com_multiplas_apostas', 0)}
 ODDS INCONSISTENTES: {len(odds_inconsistentes)}
 
 Com base nestes dados, forneça:
-1. Perfil do jogador (RECREATIVO, PROFISSIONAL, ARBITRADOR)
+1. Perfil do jogador (RECREATIVO, PROFISSIONAL, ARBITRADOR ou CRÍTICO)
 2. Principais riscos identificados
-3. Recomendações de ação
+3. Recomendações de ação específicas
 """
                 
                 # Chamar IA
@@ -435,6 +459,14 @@ Com base nestes dados, forneça:
                     st.markdown("### 📊 Relatório Gerado")
                     st.info(response.text)
                     st.balloons()
+                    
+                    # Mostrar odds inconsistentes se houver
+                    if odds_inconsistentes:
+                        with st.expander("🚨 Detalhes das odds inconsistentes", expanded=True):
+                            st.warning(f"**{len(odds_inconsistentes)} odds inconsistentes detectadas!**")
+                            df_odds = pd.DataFrame(odds_inconsistentes)
+                            st.dataframe(df_odds, use_container_width=True)
+                    
                 except Exception as e:
                     st.error(f"Erro na IA: {e}")
         
